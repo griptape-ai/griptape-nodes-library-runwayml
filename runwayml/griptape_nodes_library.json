@@ -1,0 +1,53 @@
+{
+    "name": "RunwayML Library",
+    "library_schema_version": "0.1.0",
+    "settings": [
+        {
+            "description": "Environment variables for RunwayML API access",
+            "category": "nodes.RunwayML",
+            "contents": {
+                "RUNWAYML_API_SECRET": "$RUNWAYML_API_SECRET"
+            }
+        }
+    ],
+    "metadata": {
+        "author": "Griptape",
+        "description": "Griptape Nodes for interacting with the RunwayML API.",
+        "library_version": "0.1.0",
+        "engine_version": "0.1.0",
+        "tags": [
+            "Griptape",
+            "AI",
+            "RunwayML",
+            "Video Generation",
+            "Image Generation"
+        ],
+        "dependencies": {
+            "pip_dependencies": [
+                "runwayml",
+                "requests"
+            ]
+        }
+    },
+    "categories": [
+        {
+            "RunwayML": {
+                "color": "border-purple-500",
+                "title": "RunwayML",
+                "description": "Nodes for using the RunwayML API.",
+                "icon": "Camera"
+            }
+        }
+    ],
+    "nodes": [
+        {
+            "class_name": "RunwayML_ImageToVideo",
+            "file_path": "image_to_video.py",
+            "metadata": {
+                "category": "RunwayML",
+                "description": "Generates a video from an image and a text prompt using the RunwayML image-to-video API.",
+                "display_name": "RunwayML Image-to-Video"
+            }
+        }
+    ]
+}
