@@ -48,6 +48,24 @@
                 "description": "Generates a video from an image and a text prompt using the RunwayML image-to-video API.",
                 "display_name": "RunwayML Image-to-Video"
             }
+        },
+        {
+            "class_name": "RunwayML_TextToImage",
+            "file_path": "text_to_image.py",
+            "metadata": {
+                "category": "RunwayML",
+                "description": "Generates images from text prompts with optional reference images using the RunwayML text-to-image API.",
+                "display_name": "RunwayML Text-to-Image"
+            }
+        },
+        {
+            "class_name": "RunwayML_CreateReferenceImage",
+            "file_path": "create_reference_image.py",
+            "metadata": {
+                "category": "RunwayML",
+                "description": "Creates a reference image artifact with a tag for use in RunwayML text-to-image generation.",
+                "display_name": "RunwayML Create Reference Image"
+            }
         }
     ]
 }
