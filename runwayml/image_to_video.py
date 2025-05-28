@@ -253,6 +253,28 @@ class RunwayML_ImageToVideo(ControlNode):
             # Publish error artifact if possible (though process won't yield it directly here)
             self.publish_update_to_parameter("video_output", ErrorArtifact(error_message))
             raise ValueError(f"Validation failed: {error_message}")
+        
+        # Get parameter values OUTSIDE the async function to ensure idempotency
+        # Create fresh copies to avoid any state modification issues
+        prompt_text = str(self.get_parameter_value("prompt") or "").strip()
+        model_name = str(self.get_parameter_value("model") or DEFAULT_MODEL)
+        
+        ratio_input = self.get_parameter_value("ratio")
+        if isinstance(ratio_input, tuple) and len(ratio_input) == 2:
+            ratio_val = str(ratio_input[1])
+        else:
+            ratio_val = str(ratio_input or DEFAULT_API_RATIO)
+        
+        seed_val = self.get_parameter_value("seed") or 0
+        motion_score_val = self.get_parameter_value("motion_score") or 10
+        upscale_val = bool(self.get_parameter_value("upscale") or False)
+        
+        # Get image data outside async function
+        image_data_uri = self._get_image_data_uri("image")
+        if not image_data_uri:
+            error_msg = "Failed to process image input."
+            self.publish_update_to_parameter("video_output", ErrorArtifact(error_msg))
+            raise ValueError(error_msg)
             
         def generate_video_async() -> VideoUrlArtifact | ErrorArtifact:
             try:
@@ -261,21 +283,7 @@ class RunwayML_ImageToVideo(ControlNode):
                 # For now, rely on SDK's default behavior.
                 client = runwayml.RunwayML()
 
-                image_data_uri = self._get_image_data_uri("image")
-                if not image_data_uri: # Should be caught by validation, but double check
-                    return ErrorArtifact("Failed to process image input.")
-
-                prompt_text = str(self.get_parameter_value("prompt") or "").strip()
-                model_name = str(self.get_parameter_value("model") or DEFAULT_MODEL)
-                
-                ratio_input = self.get_parameter_value("ratio") # Should be a string now
-                # The isinstance check for tuple might no longer be necessary if choices are strings,
-                # but keeping it for robustness in case value comes from elsewhere.
-                if isinstance(ratio_input, tuple) and len(ratio_input) == 2:
-                    ratio_val = str(ratio_input[1]) 
-                else:
-                    ratio_val = str(ratio_input or DEFAULT_API_RATIO)
-                
+                # Use the pre-fetched values to ensure idempotency
                 task_payload = {
                     "model": model_name,
                     "prompt_image": image_data_uri, 
@@ -283,7 +291,18 @@ class RunwayML_ImageToVideo(ControlNode):
                     "ratio": ratio_val, 
                 }
 
-                logger.info(f"RunwayML I2V: Creating task with payload: {task_payload}")
+                # Add optional parameters if they have non-default values
+                if seed_val and seed_val != 0:
+                    task_payload["seed"] = seed_val
+                
+                if motion_score_val != 10:  # Only add if different from default
+                    task_payload["motion_score"] = motion_score_val
+                
+                if upscale_val:
+                    task_payload["upscale"] = upscale_val
+
+                logger.info(f"RunwayML I2V: Creating task with payload keys: {list(task_payload.keys())}")
+                logger.info(f"RunwayML I2V: Prompt text: '{prompt_text}'")
                 
                 # Create a new image-to-video task
                 image_to_video_task = client.image_to_video.create(**task_payload) # type: ignore[arg-type]
