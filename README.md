@@ -2,7 +2,7 @@
 
 This library provides Griptape Nodes for interacting with the RunwayML video generation services. You can use these nodes to generate videos from images and text prompts.
 
-**IMPORTANT:** To use these nodes, you will need an API key from RunwayML. Please visit the [RunwayML website](https://runwayml.com/) and their [API documentation](https://docs.dev.runwayml.com/guides/using-the-api/) for more information on how to obtain your key. You will need to set the `RUNWAYML_API_SECRET` environment variable, or configure it in your Griptape Nodes Engine settings for the "RunwayML" service.
+**IMPORTANT:** To use these nodes, you will need an API key from RunwayML. Please visit the [RunwayML website](https://runwayml.com/) and their [API documentation](https://docs.dev.runwayml.com/guides/using-the-api/) for more information on how to obtain your key.
 
 To configure your key within the Griptape Nodes IDE:
 1. Open the **Settings** menu.
