@@ -152,7 +152,14 @@ class RunwayML_ImageToVideo(ControlNode):
             return None
 
         if isinstance(image_input, ImageArtifact): # Already Base64
-            media_type = image_input.media_type or "image/png" 
+            # Convert format to media type
+            format_to_media_type = {
+                "JPEG": "image/jpeg",
+                "PNG": "image/png",
+                "WEBP": "image/webp",
+                "GIF": "image/gif"
+            }
+            media_type = format_to_media_type.get(image_input.format, "image/png")
             if not image_input.base64.startswith(f"data:{media_type};base64,"):
                  return f"data:{media_type};base64,{image_input.base64}"
             return image_input.base64

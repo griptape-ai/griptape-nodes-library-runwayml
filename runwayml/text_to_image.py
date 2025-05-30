@@ -1,6 +1,7 @@
 import time
 import base64
 import runwayml
+import requests
 from urllib.parse import urlparse
 import logging
 from typing import Optional
@@ -10,7 +11,7 @@ from griptape_nodes.traits.options import Options
 
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, ParameterGroup, ParameterList
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
-from griptape_nodes.retained_mode.griptape_nodes import logger
+from griptape_nodes.retained_mode.griptape_nodes import logger, GriptapeNodes
 
 
 class ReferenceImageArtifact(BaseArtifact):
@@ -200,7 +201,6 @@ class RunwayML_TextToImage(ControlNode):
             if parsed_url.scheme == "http" and (parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"):
                 logger.info(f"RunwayML T2I: Converting local HTTP URL to base64 data URI: {url_value}")
                 try:
-                    import requests
                     response = requests.get(url_value, timeout=10)
                     response.raise_for_status()
                     content_type = response.headers.get("Content-Type", "image/png")
@@ -232,7 +232,6 @@ class RunwayML_TextToImage(ControlNode):
             if parsed_url.scheme == "http" and (parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"):
                 logger.info(f"RunwayML T2I: Converting local HTTP URL string to base64 data URI: {image_input.strip()}")
                 try:
-                    import requests
                     response = requests.get(image_input.strip(), timeout=10)
                     response.raise_for_status()
                     content_type = response.headers.get("Content-Type", "image/png")
@@ -270,7 +269,6 @@ class RunwayML_TextToImage(ControlNode):
                     if parsed_url.scheme == "http" and (parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"):
                         logger.info(f"RunwayML T2I: Converting local HTTP URL from dict to base64 data URI: {url_value}")
                         try:
-                            import requests
                             response = requests.get(url_value, timeout=10)
                             response.raise_for_status()
                             content_type = response.headers.get("Content-Type", "image/png")
@@ -318,6 +316,37 @@ class RunwayML_TextToImage(ControlNode):
 
         logger.warning(f"RunwayML T2I: Unhandled image input type: {type(image_input)}")
         return None
+
+    def _download_and_store_image(self, image_url: str) -> ImageUrlArtifact:
+        """Download image from URL and store via StaticFilesManager."""
+        try:
+            logger.info(f"RunwayML T2I: Downloading image from {image_url}")
+            response = requests.get(image_url, timeout=30)
+            response.raise_for_status()
+            
+            # Determine file extension from URL or content type
+            content_type = response.headers.get("Content-Type", "image/png")
+            if "jpeg" in content_type or "jpg" in content_type:
+                extension = "jpg"
+            elif "png" in content_type:
+                extension = "png"
+            elif "webp" in content_type:
+                extension = "webp"
+            else:
+                extension = "jpg"  # Default fallback
+            
+            # Generate filename
+            filename = f"runwayml_generated_image.{extension}"
+            
+            # Save via StaticFilesManager
+            static_url = GriptapeNodes.StaticFilesManager().save_static_file(response.content, filename)
+            
+            return ImageUrlArtifact(value=static_url, name="runwayml_generated_image")
+            
+        except Exception as e:
+            logger.error(f"RunwayML T2I: Failed to download and store image: {e}")
+            # Fallback to original URL if download fails
+            return ImageUrlArtifact(value=image_url, name="runwayml_image")
 
     def validate_node(self) -> list[Exception] | None:
         errors = []
@@ -572,7 +601,7 @@ class RunwayML_TextToImage(ControlNode):
 
                         if image_url:
                             logger.info(f"RunwayML T2I generation succeeded: {image_url}")
-                            image_artifact = ImageUrlArtifact(value=image_url, name="runwayml_image")
+                            image_artifact = self._download_and_store_image(image_url)
                             self.publish_update_to_parameter("image_output", image_artifact)
                             return image_artifact
                         else:
