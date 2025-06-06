@@ -2,9 +2,11 @@ import time
 import base64
 import runwayml
 import requests
+import io
 from urllib.parse import urlparse
 import logging
 from typing import Optional
+from PIL import Image
 
 from griptape.artifacts import TextArtifact, UrlArtifact, ImageArtifact, ImageUrlArtifact, ErrorArtifact, BaseArtifact
 from griptape_nodes.traits.options import Options
@@ -82,7 +84,7 @@ class RunwayML_TextToImage(ControlNode):
         self.category = "AI/RunwayML"
         self.description = "Generates images from text prompts with optional reference images using RunwayML."
         self.metadata["author"] = "Griptape"
-        self.metadata["dependencies"] = {"pip_dependencies": ["runwayml", "requests"]}
+        self.metadata["dependencies"] = {"pip_dependencies": ["runwayml", "requests", "Pillow"]}
 
         # Main Prompt Group
         with ParameterGroup(name="Prompt") as prompt_group:
@@ -92,7 +94,7 @@ class RunwayML_TextToImage(ControlNode):
                 output_type="str",
                 type="str",
                 default_value="",
-                tooltip="Text prompt describing the desired image. Use @tagname to reference images from connected ReferenceImageArtifact instances (e.g., '@EiffelTower painted in the style of @StarryNight').",
+                tooltip="Text prompt describing the desired image. Use @tagname to reference images from connected ReferenceImageArtifact instances (e.g., '@EiffelTower painted in the style of @StarryNight'). To use an image for styling, add it as a reference image with a tag and reference it in this prompt.",
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
                 ui_options={"multiline": True, "placeholder_text": "e.g., @EiffelTower painted in the style of @StarryNight"},
             )
@@ -176,6 +178,55 @@ class RunwayML_TextToImage(ControlNode):
             logger.warning("RunwayML T2I: _get_image_data_uri received None/empty input")
             return None
 
+        # Supported formats by RunwayML
+        SUPPORTED_FORMATS = ["image/png", "image/jpeg", "image/jpg", "image/webp"]
+        
+        def _validate_and_convert_data_uri(data_uri: str) -> str:
+            """Validate data URI format and convert unsupported formats to PNG."""
+            if not data_uri.startswith("data:image"):
+                logger.warning(f"RunwayML T2I: Invalid data URI format: {data_uri[:50]}...")
+                return None
+            
+            # Extract media type
+            try:
+                header, base64_data = data_uri.split(";base64,", 1)
+                media_type = header.replace("data:", "")
+                
+                if media_type in SUPPORTED_FORMATS:
+                    return data_uri
+                
+                logger.info(f"RunwayML T2I: Converting unsupported format {media_type} to PNG")
+                
+                # Convert unsupported format to PNG
+                # Decode base64 to bytes
+                image_bytes = base64.b64decode(base64_data)
+                
+                # Open with PIL and convert to PNG
+                with Image.open(io.BytesIO(image_bytes)) as img:
+                    # Convert to RGB if necessary (for formats that might have transparency)
+                    if img.mode in ('RGBA', 'LA', 'P'):
+                        # Keep transparency for PNG
+                        if img.mode == 'P':
+                            img = img.convert('RGBA')
+                    elif img.mode not in ('RGB', 'RGBA'):
+                        img = img.convert('RGB')
+                    
+                    # Save as PNG
+                    output_buffer = io.BytesIO()
+                    img.save(output_buffer, format='PNG')
+                    output_buffer.seek(0)
+                    
+                    # Encode back to base64
+                    png_base64 = base64.b64encode(output_buffer.getvalue()).decode('utf-8')
+                    converted_uri = f"data:image/png;base64,{png_base64}"
+                    
+                    logger.info(f"RunwayML T2I: Successfully converted {media_type} to PNG")
+                    return converted_uri
+                    
+            except Exception as e:
+                logger.error(f"RunwayML T2I: Failed to convert data URI format: {e}")
+                return None
+
         if isinstance(image_input, ImageArtifact):
             logger.info(f"RunwayML T2I: Processing ImageArtifact - media_type: {getattr(image_input, 'media_type', 'N/A')}, has_base64: {bool(getattr(image_input, 'base64', None))}")
             media_type = image_input.media_type or "image/png"
@@ -184,18 +235,29 @@ class RunwayML_TextToImage(ControlNode):
             else:
                 data_uri = image_input.base64
             
-            # Check size limit (5MB for encoded data URI)
-            if len(data_uri.encode('utf-8')) > 5 * 1024 * 1024:
-                logger.warning(f"RunwayML T2I: ImageArtifact data URI exceeds 5MB limit ({len(data_uri.encode('utf-8')) / (1024*1024):.1f}MB)")
+            # Validate and convert if necessary
+            validated_uri = _validate_and_convert_data_uri(data_uri)
+            if not validated_uri:
+                logger.warning(f"RunwayML T2I: Failed to validate/convert ImageArtifact")
                 return None
             
-            logger.info(f"RunwayML T2I: Successfully created data URI from ImageArtifact ({len(data_uri)} chars)")
-            return data_uri
+            # Check size limit (5MB for encoded data URI)
+            if len(validated_uri.encode('utf-8')) > 5 * 1024 * 1024:
+                logger.warning(f"RunwayML T2I: ImageArtifact data URI exceeds 5MB limit ({len(validated_uri.encode('utf-8')) / (1024*1024):.1f}MB)")
+                return None
+            
+            logger.info(f"RunwayML T2I: Successfully processed ImageArtifact ({len(validated_uri)} chars)")
+            return validated_uri
         elif isinstance(image_input, ImageUrlArtifact):
             logger.info(f"RunwayML T2I: Processing ImageUrlArtifact - value: {getattr(image_input, 'value', 'N/A')[:100]}...")
             url_value = image_input.value
             if url_value.startswith("data:image"):
-                return url_value
+                validated_uri = _validate_and_convert_data_uri(url_value)
+                if validated_uri:
+                    return validated_uri
+                else:
+                    logger.warning(f"RunwayML T2I: Failed to validate/convert ImageUrlArtifact data URI")
+                    return None
             
             parsed_url = urlparse(url_value)
             if parsed_url.scheme == "http" and (parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"):
@@ -207,12 +269,18 @@ class RunwayML_TextToImage(ControlNode):
                     base64_data = base64.b64encode(response.content).decode("utf-8")
                     data_uri = f"data:{content_type};base64,{base64_data}"
                     
-                    # Check size limit (5MB for encoded data URI)
-                    if len(data_uri.encode('utf-8')) > 5 * 1024 * 1024:
-                        logger.warning(f"RunwayML T2I: Converted data URI exceeds 5MB limit ({len(data_uri.encode('utf-8')) / (1024*1024):.1f}MB)")
+                    # Validate and convert the generated data URI
+                    validated_uri = _validate_and_convert_data_uri(data_uri)
+                    if not validated_uri:
+                        logger.warning(f"RunwayML T2I: Failed to validate/convert local URL data URI")
                         return None
                     
-                    return data_uri
+                    # Check size limit (5MB for encoded data URI)
+                    if len(validated_uri.encode('utf-8')) > 5 * 1024 * 1024:
+                        logger.warning(f"RunwayML T2I: Converted data URI exceeds 5MB limit ({len(validated_uri.encode('utf-8')) / (1024*1024):.1f}MB)")
+                        return None
+                    
+                    return validated_uri
                 except Exception as e:
                     logger.error(f"RunwayML T2I: Failed to convert local URL {url_value} to base64: {e}")
                     return None
@@ -226,7 +294,12 @@ class RunwayML_TextToImage(ControlNode):
         elif isinstance(image_input, str):
             logger.info(f"RunwayML T2I: Processing string input: {image_input[:100]}...")
             if image_input.strip().startswith("data:image"):
-                return image_input.strip()
+                validated_uri = _validate_and_convert_data_uri(image_input.strip())
+                if validated_uri:
+                    return validated_uri
+                else:
+                    logger.warning(f"RunwayML T2I: Failed to validate/convert string data URI")
+                    return None
             
             parsed_url = urlparse(image_input.strip())
             if parsed_url.scheme == "http" and (parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"):
@@ -238,12 +311,18 @@ class RunwayML_TextToImage(ControlNode):
                     base64_data = base64.b64encode(response.content).decode("utf-8")
                     data_uri = f"data:{content_type};base64,{base64_data}"
                     
-                    # Check size limit (5MB for encoded data URI)
-                    if len(data_uri.encode('utf-8')) > 5 * 1024 * 1024:
-                        logger.warning(f"RunwayML T2I: Converted data URI exceeds 5MB limit ({len(data_uri.encode('utf-8')) / (1024*1024):.1f}MB)")
+                    # Validate and convert the generated data URI
+                    validated_uri = _validate_and_convert_data_uri(data_uri)
+                    if not validated_uri:
+                        logger.warning(f"RunwayML T2I: Failed to validate/convert local URL data URI")
                         return None
                     
-                    return data_uri
+                    # Check size limit (5MB for encoded data URI)
+                    if len(validated_uri.encode('utf-8')) > 5 * 1024 * 1024:
+                        logger.warning(f"RunwayML T2I: Converted data URI exceeds 5MB limit ({len(validated_uri.encode('utf-8')) / (1024*1024):.1f}MB)")
+                        return None
+                    
+                    return validated_uri
                 except Exception as e:
                     logger.error(f"RunwayML T2I: Failed to convert local URL string {image_input.strip()} to base64: {e}")
                     return None
@@ -275,13 +354,19 @@ class RunwayML_TextToImage(ControlNode):
                             base64_data = base64.b64encode(response.content).decode("utf-8")
                             data_uri = f"data:{content_type};base64,{base64_data}"
                             
-                            # Check size limit (5MB for encoded data URI)
-                            if len(data_uri.encode('utf-8')) > 5 * 1024 * 1024:
-                                logger.warning(f"RunwayML T2I: Converted data URI from dict exceeds 5MB limit ({len(data_uri.encode('utf-8')) / (1024*1024):.1f}MB)")
+                            # Validate and convert the generated data URI
+                            validated_uri = _validate_and_convert_data_uri(data_uri)
+                            if not validated_uri:
+                                logger.warning(f"RunwayML T2I: Failed to validate/convert local URL data URI")
                                 return None
                             
-                            logger.info(f"RunwayML T2I: Successfully converted dict URL to data URI ({len(data_uri)} chars)")
-                            return data_uri
+                            # Check size limit (5MB for encoded data URI)
+                            if len(validated_uri.encode('utf-8')) > 5 * 1024 * 1024:
+                                logger.warning(f"RunwayML T2I: Converted data URI exceeds 5MB limit ({len(validated_uri.encode('utf-8')) / (1024*1024):.1f}MB)")
+                                return None
+                            
+                            logger.info(f"RunwayML T2I: Successfully converted dict URL to data URI ({len(validated_uri)} chars)")
+                            return validated_uri
                         except Exception as e:
                             logger.error(f"RunwayML T2I: Failed to convert dict URL {url_value} to base64: {e}")
                             return None
@@ -303,13 +388,19 @@ class RunwayML_TextToImage(ControlNode):
                         else:
                             data_uri = base64_data
                         
-                        # Check size limit (5MB for encoded data URI)
-                        if len(data_uri.encode('utf-8')) > 5 * 1024 * 1024:
-                            logger.warning(f"RunwayML T2I: Dict ImageArtifact data URI exceeds 5MB limit ({len(data_uri.encode('utf-8')) / (1024*1024):.1f}MB)")
+                        # Validate and convert the data URI
+                        validated_uri = _validate_and_convert_data_uri(data_uri)
+                        if not validated_uri:
+                            logger.warning(f"RunwayML T2I: Failed to validate/convert dict ImageArtifact data URI")
                             return None
                         
-                        logger.info(f"RunwayML T2I: Successfully created data URI from dict ImageArtifact ({len(data_uri)} chars)")
-                        return data_uri
+                        # Check size limit (5MB for encoded data URI)
+                        if len(validated_uri.encode('utf-8')) > 5 * 1024 * 1024:
+                            logger.warning(f"RunwayML T2I: Dict ImageArtifact data URI exceeds 5MB limit ({len(validated_uri.encode('utf-8')) / (1024*1024):.1f}MB)")
+                            return None
+                        
+                        logger.info(f"RunwayML T2I: Successfully processed dict ImageArtifact ({len(validated_uri)} chars)")
+                        return validated_uri
             
             logger.warning(f"RunwayML T2I: Dictionary does not contain expected image artifact structure: {list(image_input.keys())}")
             return None
@@ -317,7 +408,7 @@ class RunwayML_TextToImage(ControlNode):
         logger.warning(f"RunwayML T2I: Unhandled image input type: {type(image_input)}")
         return None
 
-    def _download_and_store_image(self, image_url: str) -> ImageUrlArtifact:
+    def _download_and_store_image(self, image_url: str, task_id: str = None) -> ImageUrlArtifact:
         """Download image from URL and store via StaticFilesManager."""
         try:
             logger.info(f"RunwayML T2I: Downloading image from {image_url}")
@@ -335,8 +426,12 @@ class RunwayML_TextToImage(ControlNode):
             else:
                 extension = "jpg"  # Default fallback
             
-            # Generate filename
-            filename = f"runwayml_generated_image.{extension}"
+            # Generate filename using task ID if provided, otherwise use timestamp
+            if task_id:
+                filename = f"runwayml_generated_image_{task_id}.{extension}"
+            else:
+                timestamp = int(time.time() * 1000)  # milliseconds for uniqueness
+                filename = f"runwayml_generated_image_{timestamp}.{extension}"
             
             # Save via StaticFilesManager
             static_url = GriptapeNodes.StaticFilesManager().save_static_file(response.content, filename)
@@ -444,8 +539,9 @@ class RunwayML_TextToImage(ControlNode):
 
         def generate_image_async() -> ImageUrlArtifact | ErrorArtifact:
             try:
-                client = runwayml.RunwayML()
-
+                # Clear previous output to prevent showing stale results
+                self.publish_update_to_parameter("image_output", None)
+                
                 # Get parameter values - create fresh copies to ensure idempotency
                 prompt_text = str(self.get_parameter_value("prompt_text") or "").strip()
                 model_name = str(self.get_parameter_value("model") or DEFAULT_MODEL)
@@ -552,7 +648,7 @@ class RunwayML_TextToImage(ControlNode):
                 # Build task payload with fresh data
                 task_payload = {
                     "model": model_name,
-                    "prompt_text": prompt_text,
+                    "promptText": prompt_text,
                     "ratio": ratio_val,
                 }
 
@@ -560,19 +656,53 @@ class RunwayML_TextToImage(ControlNode):
                     task_payload["seed"] = seed_val
 
                 if processed_reference_images:
-                    task_payload["reference_images"] = processed_reference_images
+                    task_payload["referenceImages"] = processed_reference_images
                     logger.info(f"RunwayML T2I: Using {len(processed_reference_images)} reference images")
-                    debug_logger.info(f"Final payload reference_images: {processed_reference_images}")
+                    debug_logger.info(f"Final payload referenceImages: {processed_reference_images}")
                     debug_logger.info(f"Payload keys: {list(task_payload.keys())}")
                 else:
-                    logger.info(f"RunwayML T2I: No valid reference images, not including reference_images in payload")
+                    logger.info(f"RunwayML T2I: No valid reference images, not including referenceImages in payload")
 
                 logger.info(f"RunwayML T2I: Creating task with payload keys: {list(task_payload.keys())}")
-                debug_logger.info(f"Full payload structure (without data): {dict((k, v if k != 'reference_images' else f'[{len(v)} items]') for k, v in task_payload.items())}")
+                debug_logger.info(f"Full payload structure (without data): {dict((k, v if k != 'referenceImages' else f'[{len(v)} items]') for k, v in task_payload.items())}")
 
-                # Create text-to-image task
-                text_to_image_task = client.text_to_image.create(**task_payload)
-                task_id = text_to_image_task.id
+                # Get API key
+                api_key = self.get_config_value(service=SERVICE, value=API_KEY_ENV_VAR)
+                
+                # Create text-to-image task using direct HTTP request
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "X-Runway-Version": "2024-11-06"
+                }
+                
+                # Debug logging
+                debug_payload = {}
+                for k, v in task_payload.items():
+                    if k == 'referenceImages':
+                        debug_payload[k] = f'[{len(v)} items]' if isinstance(v, list) else v
+                    else:
+                        debug_payload[k] = v
+                logger.info(f"RunwayML T2I: Sending request to API with payload: {debug_payload}")
+                
+                response = requests.post(
+                    "https://api.dev.runwayml.com/v1/text_to_image",
+                    json=task_payload,
+                    headers=headers,
+                    timeout=60
+                )
+                
+                if response.status_code != 200:
+                    error_body = response.text
+                    logger.error(f"RunwayML T2I: API returned {response.status_code}: {error_body}")
+                    raise ValueError(f"RunwayML API Error ({response.status_code}): {error_body}")
+                
+                response.raise_for_status()
+                task_response = response.json()
+                task_id = task_response.get("id")
+                if not task_id:
+                    raise ValueError(f"No task ID returned from RunwayML API. Response: {task_response}")
+                
                 self.publish_update_to_parameter("task_id_output", task_id)
                 logger.info(f"RunwayML T2I: Task created with ID: {task_id}")
 
@@ -582,38 +712,50 @@ class RunwayML_TextToImage(ControlNode):
 
                 for attempt in range(max_retries):
                     time.sleep(retry_delay)
-                    task_status = client.tasks.retrieve(task_id)
-                    status = task_status.status
+                    
+                    # Get task status using direct HTTP request
+                    status_response = requests.get(
+                        f"https://api.dev.runwayml.com/v1/tasks/{task_id}",
+                        headers=headers,
+                        timeout=30
+                    )
+                    status_response.raise_for_status()
+                    task_status = status_response.json()
+                    status = task_status.get("status")
                     
                     logger.info(f"RunwayML T2I generation status (Task ID: {task_id}): {status} (Attempt {attempt + 1}/{max_retries})")
 
                     if status == 'SUCCEEDED':
                         image_url = None
-                        if task_status.output:
-                            if isinstance(task_status.output, list) and len(task_status.output) > 0:
-                                output_item = task_status.output[0]
-                                if hasattr(output_item, 'url') and isinstance(getattr(output_item, 'url', None), str):
-                                    image_url = getattr(output_item, 'url')
+                        output = task_status.get("output")
+                        if output:
+                            if isinstance(output, list) and len(output) > 0:
+                                output_item = output[0]
+                                if isinstance(output_item, dict) and "url" in output_item:
+                                    image_url = output_item["url"]
                                 elif isinstance(output_item, str) and output_item.startswith(('http://', 'https://')):
                                     image_url = output_item
-                            elif hasattr(task_status.output, 'url') and isinstance(getattr(task_status.output, 'url', None), str):
-                                image_url = getattr(task_status.output, 'url')
+                            elif isinstance(output, dict) and "url" in output:
+                                image_url = output["url"]
+                            elif isinstance(output, str) and output.startswith(('http://', 'https://')):
+                                image_url = output
 
                         if image_url:
                             logger.info(f"RunwayML T2I generation succeeded: {image_url}")
-                            image_artifact = self._download_and_store_image(image_url)
+                            image_artifact = self._download_and_store_image(image_url, task_id)
                             self.publish_update_to_parameter("image_output", image_artifact)
                             return image_artifact
                         else:
-                            logger.error(f"RunwayML T2I task SUCCEEDED but no output URL found. Output structure: {task_status.output}")
+                            logger.error(f"RunwayML T2I task SUCCEEDED but no output URL found. Output structure: {output}")
                             err_msg = "RunwayML T2I task SUCCEEDED but no output URL found."
                             self.publish_update_to_parameter("image_output", ErrorArtifact(err_msg))
                             return ErrorArtifact(err_msg)
                     
                     elif status == 'FAILED':
                         error_msg = f"RunwayML T2I generation failed (Task ID: {task_id})."
-                        if task_status.error:
-                            error_msg += f" Reason: {task_status.error}"
+                        error_detail = task_status.get("error")
+                        if error_detail:
+                            error_msg += f" Reason: {error_detail}"
                         logger.error(error_msg)
                         self.publish_update_to_parameter("image_output", ErrorArtifact(error_msg))
                         return ErrorArtifact(error_msg)
