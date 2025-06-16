@@ -111,18 +111,6 @@ class RunwayML_ImageToVideo(ControlNode):
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
             )
         )
-        self.add_parameter(
-            Parameter(
-                name="motion_score",
-                input_types=["int"],
-                output_type="int",
-                type="int",
-                default_value=10,
-                tooltip="Controls the amount of motion. (Range and effect may vary by model)",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-                ui_options={"min": 0, "max": 20}
-            )
-        )
 
         # Output Parameters
         self.add_parameter(
@@ -267,7 +255,6 @@ class RunwayML_ImageToVideo(ControlNode):
         model_name = str(self.get_parameter_value("model") or DEFAULT_MODEL)
         ratio_val = str(self.get_parameter_value("ratio") or DEFAULT_API_RATIO)
         seed_val = self.get_parameter_value("seed") or 0
-        motion_score_val = self.get_parameter_value("motion_score") or 10
         duration_val = self.get_parameter_value("duration") or 10
         
         # Get image data
@@ -294,9 +281,6 @@ class RunwayML_ImageToVideo(ControlNode):
                 # Add optional parameters if they have non-default values
                 if seed_val and seed_val != 0:
                     task_payload["seed"] = seed_val
-                
-                if motion_score_val != 10:
-                    task_payload["motion_score"] = motion_score_val
 
                 logger.info(f"RunwayML I2V: Creating task with payload keys: {list(task_payload.keys())}")
                 logger.info(f"RunwayML I2V: Prompt text: '{prompt_text}'")
