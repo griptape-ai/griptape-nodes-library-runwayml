@@ -25,7 +25,6 @@ Generates a video from a reference image and a text prompt using the RunwayML AP
 | `model`          | `str`                         | RunwayML model to use for generation.                                                                                        | `gen4_turbo`    |
 | `ratio`          | `str`                         | Aspect ratio for the output video. Must be one of the specific values supported by RunwayML API (e.g., "1280:720").         | `1280:720`      |
 | `seed`           | `int`                         | Seed for generation. 0 for random. (Note: May not be supported by all models or the current API version for this endpoint). | `0`             |
-| `motion_score`   | `int`                         | Controls the amount of motion. (Note: May not be supported by all models or the current API version for this endpoint).       | `10`            |
 | `upscale`        | `bool`                        | Whether to upscale the generated video. (Note: May not be supported by all models or the current API version for this endpoint). | `False`         |
 | `video_output`   | `VideoUrlArtifact`            | **Output:** URL of the generated video.                                                                                      | `None`          |
 | `task_id_output` | `str`                         | **Output:** The Task ID of the generation job from RunwayML.                                                                 | `None`          |
