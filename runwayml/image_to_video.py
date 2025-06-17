@@ -2,12 +2,13 @@ import time
 import base64
 import runwayml
 from urllib.parse import urlparse
+from typing import Any
 
 from griptape.artifacts import TextArtifact, UrlArtifact, ImageArtifact, ImageUrlArtifact, ErrorArtifact
 from griptape_nodes.traits.options import Options
 
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, ParameterGroup
-from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
+from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode, BaseNode
 from griptape_nodes.retained_mode.griptape_nodes import logger
 
 SERVICE = "RunwayML"
@@ -21,8 +22,8 @@ GEN4_TURBO_RATIOS = [
 GEN3A_TURBO_RATIOS = [
     "1280:768", "768:1280"
 ]
-DEFAULT_API_RATIO = "1280:720"
-
+GEN4_DEFAULT_ASPECT_RATIO = "1280:720"
+GEN3A_DEFAULT_ASPECT_RATIO = "1280:768"
 
 class VideoUrlArtifact(UrlArtifact):
     """
@@ -81,10 +82,10 @@ class RunwayML_ImageToVideo(ControlNode):
                 input_types=["str"],
                 output_type="str",
                 type="str",
-                default_value=DEFAULT_API_RATIO,
+                default_value=GEN4_DEFAULT_ASPECT_RATIO,
                 tooltip="Aspect ratio for the output video. Available ratios depend on selected model.",
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-                traits={Options(choices=GEN4_TURBO_RATIOS + GEN3A_TURBO_RATIOS)}
+                traits={Options(choices=GEN4_TURBO_RATIOS)}
             )
         )
 
@@ -242,6 +243,49 @@ class RunwayML_ImageToVideo(ControlNode):
 
         return errors if errors else None
 
+    def _update_option_choices(self, param: str, choices: list[str], default: str) -> None:
+        # this is a copy of the method in DataNode, but can be removed once implement in BaseNode
+        """Updates the model selection parameter with a new set of choices.
+
+        This method is intended to be called by subclasses to set the available
+        models for the driver. It modifies the 'model' parameter's `Options` trait
+        to reflect the provided choices.
+
+        Args:
+            param: The name of the parameter representing the model selection or the Parameter object itself.
+            choices: A list of model names to be set as choices.
+            default: The default model name to be set. It must be one of the provided choices.
+        """
+        parameter = self.get_parameter_by_name(param)
+        if parameter is not None:
+            trait = parameter.find_element_by_id("Options")
+            if trait and isinstance(trait, Options):
+                trait.choices = choices
+
+                if default in choices:
+                    parameter.default_value = default
+                    self.set_parameter_value(param, default)
+                else:
+                    msg = f"Default model '{default}' is not in the provided choices."
+                    raise ValueError(msg)
+        else:
+            msg = f"Parameter '{param}' not found for updating model choices."
+            raise ValueError(msg)
+
+    def after_value_set(
+        self, parameter: Parameter, value: Any, modified_parameters_set: set[str]
+    ) -> None:
+        if parameter.name == "model":
+            model_name = self.get_parameter_value("model")
+            if model_name == "gen4_turbo":
+                self._update_option_choices(param="ratio", choices=GEN4_TURBO_RATIOS, default=GEN4_DEFAULT_ASPECT_RATIO)
+            elif model_name == "gen3a_turbo":
+                self._update_option_choices(param="ratio", choices=GEN3A_TURBO_RATIOS, default=GEN3A_DEFAULT_ASPECT_RATIO)
+            modified_parameters_set.add("ratio")
+
+        return super().after_value_set(parameter, value, modified_parameters_set)
+
+
     def process(self) -> AsyncResult:
         validation_errors = self.validate_node()
         if validation_errors:
@@ -253,7 +297,7 @@ class RunwayML_ImageToVideo(ControlNode):
         # Get parameter values
         prompt_text = str(self.get_parameter_value("prompt") or "").strip()
         model_name = str(self.get_parameter_value("model") or DEFAULT_MODEL)
-        ratio_val = str(self.get_parameter_value("ratio") or DEFAULT_API_RATIO)
+        ratio_val = str(self.get_parameter_value("ratio") or GEN4_DEFAULT_ASPECT_RATIO)
         seed_val = self.get_parameter_value("seed") or 0
         duration_val = self.get_parameter_value("duration") or 10
         
