@@ -109,7 +109,7 @@ class RunwayML_TextToImage(ControlNode):
                 type="ReferenceImageArtifact",
                 default_value=None,
                 tooltip="Reference images with tags for the generation. Connect from 'Create Reference Image' nodes or other sources of ReferenceImageArtifact.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+                allowed_modes={ParameterMode.INPUT},
             )
         self.add_node_element(ref_images_group)
 
