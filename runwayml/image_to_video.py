@@ -273,7 +273,7 @@ class RunwayML_ImageToVideo(ControlNode):
             raise ValueError(msg)
 
     def after_value_set(
-        self, parameter: Parameter, value: Any, modified_parameters_set: set[str]
+        self, parameter: Parameter, value: Any
     ) -> None:
         if parameter.name == "model":
             model_name = self.get_parameter_value("model")
@@ -281,9 +281,8 @@ class RunwayML_ImageToVideo(ControlNode):
                 self._update_option_choices(param="ratio", choices=GEN4_TURBO_RATIOS, default=GEN4_DEFAULT_ASPECT_RATIO)
             elif model_name == "gen3a_turbo":
                 self._update_option_choices(param="ratio", choices=GEN3A_TURBO_RATIOS, default=GEN3A_DEFAULT_ASPECT_RATIO)
-            modified_parameters_set.add("ratio")
 
-        return super().after_value_set(parameter, value, modified_parameters_set)
+        return super().after_value_set(parameter, value)
 
 
     def process(self) -> AsyncResult:
