@@ -10,7 +10,7 @@ To configure your key within the Griptape Nodes IDE:
 3. Add a new secret configuration for the service named `RunwayML`.
 4. Enter your `RUNWAYML_API_SECRET` in the respective field.
 
-Below is a description of the node and its parameters.
+Below is a description of the nodes included in this library and their parameters.
 
 ### RunwayML Image to Video (`RunwayML_ImageToVideo`)
 
@@ -25,11 +25,35 @@ Generates a video from a reference image and a text prompt using the RunwayML AP
 | `model`          | `str`                         | RunwayML model to use for generation.                                                                                        | `gen4_turbo`    |
 | `ratio`          | `str`                         | Aspect ratio for the output video. Must be one of the specific values supported by RunwayML API (e.g., "1280:720").         | `1280:720`      |
 | `seed`           | `int`                         | Seed for generation. 0 for random. (Note: May not be supported by all models or the current API version for this endpoint). | `0`             |
-| `upscale`        | `bool`                        | Whether to upscale the generated video. (Note: May not be supported by all models or the current API version for this endpoint). | `False`         |
 | `video_output`   | `VideoUrlArtifact`            | **Output:** URL of the generated video.                                                                                      | `None`          |
 | `task_id_output` | `str`                         | **Output:** The Task ID of the generation job from RunwayML.                                                                 | `None`          |
 
-*Note: `Inputs` and `Generation Settings` parameters are grouped and may be collapsed by default in the UI. The `seed`, `motion_score`, and `upscale` parameters are included for potential future API support or use with other models but are not currently sent to the `image_to_video` endpoint based on observed API behavior.*
+
+### RunwayML Text to Image
+
+Generates an image from a text prompt and an optional list of reference images using the RunwayML API.
+
+| Parameter          | Type                    | Description                                                                                                                  | Default Value   |
+|--------------------|-------------------------|------------------------------------------------------------------------------------------------------------------------------|-----------------|
+| `prompt_text`      | `str` / `TextArtifact`  | Text prompt describing the desired image.                                                                                    | `""`            |
+| `reference_images` | `list`                  | An optional list of reference images. Click the `+` button to add reference images to the list.                              | `None`          |
+| `model`            | `str`                   | RunwayML model to use for generation.                                                                                        | `gen4_image`    |
+| `ratio`            | `str`                   | Aspect ratio for the output image. Must be one of the specific values supported by RunwayML API (e.g., "1280:720").          | `1024x1024`     |
+| `seed`             | `int`                   | Seed for generation. 0 for random. (Note: May not be supported by all models or the current API version for this endpoint).  | `0`             |
+| `image_output`     | `ImageUrlArtifact`      | **Output:** URL of the generated video.                                                                                      | `None`          |
+| `task_id_output`   | `str`                   | **Output:** The Task ID of the generation job from RunwayML.                                                                 | `None`          |
+
+
+### RunwayML Create Reference Image
+
+Creates a `ReferenceImageArtifact` for use as an entry in the `reference_images` list in an instance of a RunwayML Text to Image node. Reference images can be used to combine different objects or characters into an image, and for image editing and style transfer use-cases.
+
+| Parameter         | Type                                        | Description                                                                                              | Default Value   |
+|-------------------|---------------------------------------------|----------------------------------------------------------------------------------------------------------|-----------------|
+| `image`           | `ImageArtifact`, `ImageUrlArtifact`, `str`  | Text prompt describing the desired image.                                                                | `""`            |
+| `tag    `         | `list`                                      | The tag to reference this image in prompts (e.g., 'EiffelTower'). Use @tag in your prompt.               | `None`          |
+| `reference_image` | `ReferenceImageArtifact`                    | **Output:** `ReferenceImageArtifact` combining the image and tag. Connect to RunwayML Text to Image node | `None`          |
+
 
 ## Add your library to your installed Engine! 
 
