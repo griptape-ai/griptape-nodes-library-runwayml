@@ -243,35 +243,6 @@ class RunwayML_ImageToVideo(ControlNode):
 
         return errors if errors else None
 
-    def _update_option_choices(self, param: str, choices: list[str], default: str) -> None:
-        # this is a copy of the method in DataNode, but can be removed once implement in BaseNode
-        """Updates the model selection parameter with a new set of choices.
-
-        This method is intended to be called by subclasses to set the available
-        models for the driver. It modifies the 'model' parameter's `Options` trait
-        to reflect the provided choices.
-
-        Args:
-            param: The name of the parameter representing the model selection or the Parameter object itself.
-            choices: A list of model names to be set as choices.
-            default: The default model name to be set. It must be one of the provided choices.
-        """
-        parameter = self.get_parameter_by_name(param)
-        if parameter is not None:
-            trait = parameter.find_element_by_id("Options")
-            if trait and isinstance(trait, Options):
-                trait.choices = choices
-
-                if default in choices:
-                    parameter.default_value = default
-                    self.set_parameter_value(param, default)
-                else:
-                    msg = f"Default model '{default}' is not in the provided choices."
-                    raise ValueError(msg)
-        else:
-            msg = f"Parameter '{param}' not found for updating model choices."
-            raise ValueError(msg)
-
     def after_value_set(
         self, parameter: Parameter, value: Any
     ) -> None:
