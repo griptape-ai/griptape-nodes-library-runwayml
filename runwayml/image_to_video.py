@@ -372,7 +372,7 @@ class RunwayML_ImageToVideo(ControlNode):
                     
                     elif status == 'FAILED':
                         error_msg = f"RunwayML I2V generation failed (Task ID: {task_id})."
-                        if task_status.error:
+                        if hasattr(task_status, 'error') and task_status.error:
                             error_msg += f" Reason: {task_status.error}"
                         logger.error(error_msg)
                         self.publish_update_to_parameter("video_output", ErrorArtifact(error_msg))
