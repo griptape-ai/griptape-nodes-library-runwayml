@@ -763,7 +763,7 @@ class RunwayML_TextToImage(ControlNode):
                     
                     elif status == 'FAILED':
                         error_msg = f"RunwayML T2I generation failed (Task ID: {task_id})."
-                        error_detail = task_status.get("error")
+                        error_detail = task_status.get("failure")
                         if error_detail:
                             error_msg += f" Reason: {error_detail}"
                         logger.error(error_msg)
