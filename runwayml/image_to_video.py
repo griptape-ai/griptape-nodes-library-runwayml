@@ -309,7 +309,9 @@ class RunwayML_ImageToVideo(ControlNode):
             
         def generate_video_async() -> VideoUrlArtifact | ErrorArtifact:
             try:
-                client = runwayml.RunwayML()
+                api_key = self.get_config_value(service=SERVICE, value=API_KEY_ENV_VAR)
+
+                client = runwayml.RunwayML(api_key=api_key)
 
                 task_payload = {
                     "model": model_name,
