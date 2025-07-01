@@ -7,6 +7,7 @@ import requests
 from PIL import Image
 import io
 
+
 class ReferenceImageArtifact(BaseArtifact):
     """
     A custom artifact that combines an image with a reference tag.
@@ -157,7 +158,9 @@ class RunwayML_CreateReferenceImage(DataNode):
                 self.parameter_output_values["reference_image"] = None
                 return
         else:
-            logger.info("CreateReferenceImage: Skipping aspect ratio validation for unsupported image type")
+            logger.info("CreateReferenceImage: Unsupported image type, cannot validate aspect ratio")
+            self.parameter_output_values["reference_image"] = None
+            return
 
         # Generate default tag if empty
         if not tag.strip():
