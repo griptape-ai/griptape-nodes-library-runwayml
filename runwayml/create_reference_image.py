@@ -3,7 +3,9 @@ from griptape.artifacts import ImageArtifact, ImageUrlArtifact, BaseArtifact
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import DataNode
 from griptape_nodes.retained_mode.griptape_nodes import logger
-
+import requests
+from PIL import Image
+import io
 
 class ReferenceImageArtifact(BaseArtifact):
     """
@@ -101,6 +103,62 @@ class RunwayML_CreateReferenceImage(DataNode):
             self.parameter_output_values["reference_image"] = None
             return
         
+        # Note: ImageUrlArtifact doesn't have ratio attribute, so we skip ratio validation
+        # If ratio validation is needed, the image would need to be downloaded and analyzed
+        if isinstance(image, ImageUrlArtifact):
+            logger.info("CreateReferenceImage: Downloading and analyzing ImageUrlArtifact for aspect ratio validation")
+            
+            # Download and analyze the image
+            try:
+                response = requests.get(image.value, timeout=10)
+                response.raise_for_status()
+                
+                image_data = io.BytesIO(response.content)
+                img = Image.open(image_data)
+                aspect_ratio = img.width / img.height
+                
+                logger.info(f"CreateReferenceImage: Image dimensions: {img.width}x{img.height}, aspect ratio: {aspect_ratio:.2f}")
+                
+                if not 0.5 <= aspect_ratio <= 2.0:
+                    logger.warning(f"CreateReferenceImage: Image aspect ratio {aspect_ratio:.2f} is outside valid range (0.5-2.0)")
+                    self.parameter_output_values["reference_image"] = None
+                    return
+                    
+            except Exception as e:
+                logger.warning(f"CreateReferenceImage: Failed to download/analyze image: {e}")
+                # Continue without validation rather than failing completely
+                
+        elif isinstance(image, ImageArtifact):
+            # ImageArtifact has base64 data, we can analyze it directly
+            try:
+                import base64
+                image_data = io.BytesIO(base64.b64decode(image.base64))
+                img = Image.open(image_data)
+                aspect_ratio = img.width / img.height
+                
+                logger.info(f"CreateReferenceImage: Image dimensions: {img.width}x{img.height}, aspect ratio: {aspect_ratio:.2f}")
+                
+                if not 0.5 <= aspect_ratio <= 2.0:
+                    logger.warning(f"CreateReferenceImage: Image aspect ratio {aspect_ratio:.2f} is outside valid range (0.5-2.0)")
+                    self.parameter_output_values["reference_image"] = None
+                    return
+                    
+            except Exception as e:
+                logger.warning(f"CreateReferenceImage: Failed to analyze ImageArtifact: {e}")
+                # Continue without validation rather than failing completely
+                
+        elif isinstance(image, dict) and "meta" in image and "aspectRatio" in image["meta"]:
+            # Handle dict format with meta information
+            aspect_ratio = image["meta"]["aspectRatio"]
+            logger.info(f"CreateReferenceImage: Using provided aspect ratio: {aspect_ratio}")
+            
+            if not 0.5 <= aspect_ratio <= 2.0:
+                logger.warning(f"CreateReferenceImage: Image aspect ratio {aspect_ratio} is outside valid range (0.5-2.0)")
+                self.parameter_output_values["reference_image"] = None
+                return
+        else:
+            logger.info("CreateReferenceImage: Skipping aspect ratio validation for unsupported image type")
+
         # Generate default tag if empty
         if not tag.strip():
             # Use a simple counter-based default tag
