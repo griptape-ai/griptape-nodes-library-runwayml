@@ -7,8 +7,6 @@ import requests
 from PIL import Image
 import io
 
-from rich.pretty import pprint
-
 class ReferenceImageArtifact(BaseArtifact):
     """
     A custom artifact that combines an image with a reference tag.
