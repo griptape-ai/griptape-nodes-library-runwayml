@@ -49,6 +49,15 @@
     ],
     "nodes": [
         {
+            "class_name": "RunwayML_CharacterPerformance",
+            "file_path": "character_performance.py",
+            "metadata": {
+                "category": "video/runwayml",
+                "description": "Generates a character performance video using the RunwayML Act Two API.",
+                "display_name": "RunwayML Character Performance"
+            }
+        },
+        {
             "class_name": "RunwayML_ImageToVideo",
             "file_path": "image_to_video.py",
             "metadata": {
