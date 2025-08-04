@@ -57,7 +57,7 @@ Creates a `ReferenceImageArtifact` for use as an entry in the `reference_images`
 
 ### RunwayML Character Performance (`RunwayML_CharacterPerformance`)
 
-Generates a character performance video using RunwayML's Act Two API. This node allows you to animate a character (from an image or video) to perform actions based on a reference video.
+Generates a character performance video using RunwayML's Act Two API. This node allows you to animate a character (from an image or video) to perform actions based on a reference video. We strongly recommend that you install ffmpeg in order to enable video transcoding features in this node.
 
 | Parameter                | Type                                                                | Description                                                                                                                 | Default Value   |
 |-------------------------|---------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|-----------------|
@@ -71,6 +71,23 @@ Generates a character performance video using RunwayML's Act Two API. This node 
 | `model`                 | `str`                                                               | [REQUIRED] RunwayML model to use for generation.                                                                             | `act_two`       |
 | `public_figure_threshold` | `str`                                                             | [OPTIONAL] Public figure threshold for content moderation. One of: "auto", "low"                                             | `auto`          |
 | `video_output`          | `VideoUrlArtifact`                                                  | **Output:** URL of the generated video. Renders in the node as a video that you can play.                                    | `None`          |
+| `task_id_output`        | `str`                                                               | **Output:** The Task ID of the generation job from RunwayML.                                                                 | `None`          |
+
+
+### RunwayML Video to Video (`RunwayML_VideoToVideo`)
+
+Generates a video from an input video and a text prompt using RunwayML's Video-to-Video API. We strongly recommend that you install ffmpeg in order to enable video transcoding features in this node.
+
+| Parameter                | Type                                                                | Description                                                                                                                 | Default Value   |
+|-------------------------|---------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|-----------------|
+| `video`                 | `VideoUrlArtifact` / `UrlArtifact` / `str`                          | Input video (required). Accepts VideoUrlArtifact, UrlArtifact, or a public URL string.                                       | `None`          |
+| `prompt`                | `str` / `TextArtifact`                                              | Text prompt describing the desired video content.                                                                            | `""`            |
+| `model`                 | `str`                                                               | RunwayML model to use for generation.                                                                                        | `gen4_aleph`    |
+| `ratio`                 | `str`                                                               | Aspect ratio for the output video. One of: "1280:720", "720:1280", "1104:832", "832:1104", "960:960", "1584:672"            | `1280:720`      |
+| `seed`                  | `int`                                                               | Seed for generation. 0 for random.                                                                                           | `0`             |
+| `reference_image`       | `ImageArtifact` / `ImageUrlArtifact` / `str`                        | Optional reference image for the generation. Supports only JPEG, PNG, and WebP formats.                                       | `None`          |
+| `public_figure_threshold` | `str`                                                             | Public figure threshold for content moderation. One of: "auto", "low"                                                        | `auto`          |
+| `video_output`          | `VideoUrlArtifact`                                                  | **Output:** URL of the generated video.                                                                                      | `None`          |
 | `task_id_output`        | `str`                                                               | **Output:** The Task ID of the generation job from RunwayML.                                                                 | `None`          |
 
 
