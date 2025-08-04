@@ -50,7 +50,7 @@ class RunwayML_VideoToVideo(ControlNode):
                 input_types=["VideoArtifact","VideoUrlArtifact", "UrlArtifact", "str"],
                 type="UrlArtifact", 
                 tooltip="Input video (required). Accepts VideoUrlArtifact, UrlArtifact, or a public URL string.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+                allowed_modes={ParameterMode.INPUT},
             )
         )
         self.add_parameter(
@@ -61,7 +61,7 @@ class RunwayML_VideoToVideo(ControlNode):
                 type="str",
                 default_value="",
                 tooltip="Text prompt describing the desired video content.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY, ParameterMode.OUTPUT},
                 ui_options={"multiline": True, "placeholder_text": "e.g., a cinematic shot of a car driving down a road"},
             )
         )
@@ -108,7 +108,7 @@ class RunwayML_VideoToVideo(ControlNode):
                 input_types=["ImageArtifact", "ImageUrlArtifact", "str"],
                 type="ImageArtifact", 
                 tooltip="Optional reference image for the generation.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+                allowed_modes={ParameterMode.INPUT, ParameterMode.OUTPUT},
             )
         )
         
@@ -135,7 +135,7 @@ class RunwayML_VideoToVideo(ControlNode):
                 default_value=None,
                 allowed_modes={ParameterMode.OUTPUT},
                 tooltip="Output URL of the generated video.",
-                ui_options={"placeholder_text": "", "is_full_width": True, "pulse_on_run": True}
+                ui_options={"placeholder_text": "", "is_full_width": False, "pulse_on_run": True}
             )
         )
         self.add_parameter(
