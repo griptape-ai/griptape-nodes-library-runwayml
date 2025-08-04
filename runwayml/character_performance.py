@@ -55,7 +55,7 @@ class RunwayML_CharacterPerformance(ControlNode):
                 input_types=["ImageArtifact", "ImageUrlArtifact", "str"],
                 type="ImageArtifact", 
                 tooltip="[REQUIRED*] Input image of the character. Either character_image OR character_video must be provided. Accepts ImageArtifact, ImageUrlArtifact, a public URL string, or a base64 data URI string.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+                allowed_modes={ParameterMode.INPUT, ParameterMode.OUTPUT},
                 ui_options={"clickable_file_browser": True}
             )
             
@@ -64,7 +64,7 @@ class RunwayML_CharacterPerformance(ControlNode):
                 input_types=["VideoArtifact", "UrlArtifact", "VideoUrlArtifact", "str"],
                 type="UrlArtifact", 
                 tooltip="[REQUIRED*] Character video for the performance. Either character_image OR character_video must be provided. Accepts UrlArtifact, VideoUrlArtifact, a public URL string, or a base64 data URI string.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+                allowed_modes={ParameterMode.INPUT, ParameterMode.OUTPUT},
                 ui_options={"clickable_file_browser": True}
             )
             
@@ -73,7 +73,7 @@ class RunwayML_CharacterPerformance(ControlNode):
                 input_types=["VideoArtifact", "UrlArtifact", "VideoUrlArtifact", "str"],
                 type="UrlArtifact", 
                 tooltip="[REQUIRED] Reference video for the character. Accepts UrlArtifact, VideoUrlArtifact, a public URL string, or a base64 data URI string.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+                allowed_modes={ParameterMode.INPUT, ParameterMode.OUTPUT},
                 ui_options={"clickable_file_browser": True}
             )
         self.add_node_element(media_inputs_group)
@@ -154,7 +154,7 @@ class RunwayML_CharacterPerformance(ControlNode):
                 default_value=None,
                 allowed_modes={ParameterMode.OUTPUT},
                 tooltip="Output URL of the generated video.",
-                ui_options={"placeholder_text": "", "is_full_width": True, "pulse_on_run": True}
+                ui_options={"placeholder_text": "", "is_full_width": False, "pulse_on_run": True}
             )
         )
         self.add_parameter(
