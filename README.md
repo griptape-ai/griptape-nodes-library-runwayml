@@ -55,6 +55,25 @@ Creates a `ReferenceImageArtifact` for use as an entry in the `reference_images`
 | `reference_image` | `ReferenceImageArtifact`                    | **Output:** `ReferenceImageArtifact` combining the image and tag. Connect to RunwayML Text to Image node | `None`          |
 
 
+### RunwayML Character Performance (`RunwayML_CharacterPerformance`)
+
+Generates a character performance video using RunwayML's Act Two API. This node allows you to animate a character (from an image or video) to perform actions based on a reference video.
+
+| Parameter                | Type                                                                | Description                                                                                                                 | Default Value   |
+|-------------------------|---------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|-----------------|
+| `character_image`       | `ImageArtifact` / `ImageUrlArtifact` / `str`                        | [REQUIRED*] Input image of the character. Either character_image OR character_video must be provided. Accepts ImageArtifact, ImageUrlArtifact, a public URL string, or a base64 data URI string. | `None`          |
+| `character_video`       | `VideoArtifact` / `UrlArtifact` / `VideoUrlArtifact` / `str`        | [REQUIRED*] Character video for the performance. Either character_image OR character_video must be provided. Accepts UrlArtifact, VideoUrlArtifact, a public URL string, or a base64 data URI string. | `None`          |
+| `reference_video`       | `VideoArtifact` / `UrlArtifact` / `VideoUrlArtifact` / `str`        | [REQUIRED] Reference video for the character. Accepts UrlArtifact, VideoUrlArtifact, a public URL string, or a base64 data URI string. | `None`          |
+| `body_control`          | `bool`                                                              | [REQUIRED] Whether to enable body control.                                                                                   | `True`          |
+| `expression_intensity`  | `int`                                                               | [REQUIRED] Expression intensity (1-5).                                                                                       | `3`             |
+| `ratio`                 | `str`                                                               | [REQUIRED] Aspect ratio for the output video. One of: "1280:720", "720:1280", "1104:832", "832:1104", "960:960", "1584:672"  | `1280:720`      |
+| `seed`                  | `int`                                                               | [OPTIONAL] Seed for generation. 0 for random.                                                                                | `0`             |
+| `model`                 | `str`                                                               | [REQUIRED] RunwayML model to use for generation.                                                                             | `act_two`       |
+| `public_figure_threshold` | `str`                                                             | [OPTIONAL] Public figure threshold for content moderation. One of: "auto", "low"                                             | `auto`          |
+| `video_output`          | `VideoUrlArtifact`                                                  | **Output:** URL of the generated video. Renders in the node as a video that you can play.                                    | `None`          |
+| `task_id_output`        | `str`                                                               | **Output:** The Task ID of the generation job from RunwayML.                                                                 | `None`          |
+
+
 ## Add your library to your installed Engine! 
 
 If you haven't already installed your Griptape Nodes engine, follow the installation steps [HERE](https://github.com/griptape-ai/griptape-nodes).
