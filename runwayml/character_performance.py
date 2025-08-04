@@ -1,5 +1,9 @@
 import time
 import base64
+import json
+import os
+import subprocess
+import tempfile
 import runwayml
 import requests
 from urllib.parse import urlparse
@@ -372,20 +376,13 @@ class RunwayML_CharacterPerformance(ControlNode):
                 logger.info(f"RunwayML Act Two: Creating task with payload keys: {list(task_payload.keys())}")
                 
                 # Print detailed debug information about the payload
-                import json
-                import os
                 
                 # Validate and debug the data URIs
                 def validate_data_uri(uri, param_name):
-                    import tempfile
-                    import subprocess
-                    import os
-                    import platform
-                    import time
                     
                     if not uri or not uri.startswith("data:"):
                         print(f"WARNING: {param_name} is not a data URI: {uri[:50]}...")
-                        return False
+                        return False, {}
                     
                     try:
                         # Get content type and base64 data
@@ -414,51 +411,223 @@ class RunwayML_CharacterPerformance(ControlNode):
                         with open(temp_file, "wb") as f:
                             f.write(decoded)
                         
-                        print(f"SUCCESS: {param_name} is a valid data URI with content type {content_type}")
-                        print(f"Content size: {len(decoded)} bytes")
-                        print(f"Total encoded length: {len(uri)} chars")
-                        print(f"Decoded file saved at: {temp_file}")
+                        # Extract and analyze metadata for videos using ffprobe
+                        metadata = {}
+                        if content_type.startswith('video/'):
+                            try:
+                                # First try ffprobe (if available)
+                                try:
+                                    # Use ffprobe to get detailed video metadata
+                                    cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", temp_file]
+                                    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                                    
+                                    if result.returncode == 0:
+                                        metadata = json.loads(result.stdout)
+                                        print(f"\nVIDEO METADATA ANALYSIS for {param_name}:")
+                                        print("=====================================")
+                                        
+                                        # Extract useful information
+                                        if 'streams' in metadata:
+                                            for idx, stream in enumerate(metadata['streams']):
+                                                stream_type = stream.get('codec_type', 'unknown')
+                                                print(f"Stream #{idx} ({stream_type}):")
+                                                
+                                                # Print important properties based on stream type
+                                                if stream_type == 'video':
+                                                    print(f"  - Codec: {stream.get('codec_name', 'unknown')}")
+                                                    print(f"  - Resolution: {stream.get('width', '?')}x{stream.get('height', '?')}")
+                                                    print(f"  - Framerate: {stream.get('r_frame_rate', 'unknown')}")
+                                                    print(f"  - Pixel format: {stream.get('pix_fmt', 'unknown')}")
+                                                    print(f"  - Duration: {stream.get('duration', 'unknown')} seconds")
+                                                    print(f"  - Bitrate: {stream.get('bit_rate', 'unknown')} bits/s")
+                                                elif stream_type == 'audio':
+                                                    print(f"  - Codec: {stream.get('codec_name', 'unknown')}")
+                                                    print(f"  - Sample rate: {stream.get('sample_rate', 'unknown')} Hz")
+                                                    print(f"  - Channels: {stream.get('channels', 'unknown')}")
+                                                    print(f"  - Duration: {stream.get('duration', 'unknown')} seconds")
+                                                    
+                                        if 'format' in metadata:
+                                            fmt = metadata['format']
+                                            print(f"\nFormat:")
+                                            print(f"  - Format name: {fmt.get('format_name', 'unknown')}")
+                                            print(f"  - Duration: {fmt.get('duration', 'unknown')} seconds")
+                                            print(f"  - Size: {fmt.get('size', 'unknown')} bytes")
+                                            print(f"  - Bit rate: {fmt.get('bit_rate', 'unknown')} bits/s")
+                                        
+                                        # RunwayML likely requirements - print warnings for potential issues
+                                        print("\nPotential issues for RunwayML:")
+                                        
+                                        # Check common issues
+                                        has_issues = False
+                                        
+                                        # Check for video stream
+                                        has_video = any(s.get('codec_type') == 'video' for s in metadata.get('streams', []))
+                                        if not has_video:
+                                            print("  ❌ No video stream found!")
+                                            has_issues = True
+                                        
+                                        # Check for common unsupported video codecs
+                                        video_streams = [s for s in metadata.get('streams', []) if s.get('codec_type') == 'video']
+                                        for vs in video_streams:
+                                            codec = vs.get('codec_name', '').lower()
+                                            if codec not in ['h264', 'avc1', 'mp4v']:
+                                                print(f"  ⚠️ Potentially unsupported video codec: {codec} (RunwayML prefers H.264)")
+                                                has_issues = True
+                                            
+                                        # Check for odd resolutions
+                                        for vs in video_streams:
+                                            width = vs.get('width', 0)
+                                            height = vs.get('height', 0)
+                                            if width % 2 != 0 or height % 2 != 0:
+                                                print(f"  ⚠️ Non-even dimensions: {width}x{height} (dimensions should be even numbers)")
+                                                has_issues = True
+                                            
+                                            # Check pixel format
+                                            pix_fmt = vs.get('pix_fmt', '')
+                                            if pix_fmt != 'yuv420p':
+                                                print(f"  ⚠️ Non-standard pixel format: {pix_fmt} (RunwayML prefers yuv420p)")
+                                                has_issues = True
+                                        
+                                        # Check if file might be too large
+                                        file_size = int(metadata.get('format', {}).get('size', 0))
+                                        if file_size > 50 * 1024 * 1024:  # 50MB
+                                            print(f"  ⚠️ File may be too large: {file_size/1024/1024:.2f}MB")
+                                            has_issues = True
+                                        
+                                        if not has_issues:
+                                            print("  ✅ No obvious issues detected")
+                                    else:
+                                        print(f"Failed to extract video metadata with ffprobe: {result.stderr}")
+                                except (FileNotFoundError, subprocess.SubprocessError) as e:
+                                    print(f"Note: ffprobe not available, skipping detailed video analysis: {str(e)}")
+                                except json.JSONDecodeError:
+                                    print("Error parsing ffprobe output")
+                            except Exception as meta_error:
+                                print(f"Error during metadata analysis: {str(meta_error)}")
                         
-                        # Try to open the file with the default viewer
-                        try:
-                            system = platform.system()
-                            if system == "Darwin":  # macOS
-                                subprocess.Popen(["open", temp_file])
-                            elif system == "Windows":
-                                os.startfile(temp_file)
-                            elif system == "Linux":
-                                subprocess.Popen(["xdg-open", temp_file])
-                            print(f"Opened {param_name} in default viewer")
-                        except Exception as open_error:
-                            print(f"Note: Could not open in viewer: {str(open_error)}")
                         
-                        return True
+                        return True, metadata
                     except Exception as e:
                         print(f"ERROR: {param_name} data URI validation failed: {str(e)}")
-                        return False
+                        return False, {}
                 
                 # Validate character URI
                 character_uri = task_payload["character"]["uri"]
                 character_type = task_payload["character"]["type"]
-                validate_data_uri(character_uri, f"character_{character_type}")
+                character_valid, character_metadata = validate_data_uri(character_uri, f"character_{character_type}")
+                
+                # Only transcode character video, not image
+                transcoded_character_uri = None
+                if character_type == "video" and character_valid:
+                    print("\n===== CHARACTER VIDEO VALIDATION =====")
+                    
+                    # Additional codec validation for character video
+                    try:
+                        # Make a clean temporary file for media validation
+                        char_temp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+                        char_temp_file.close()
+                        
+                        # Extract content
+                        header, encoded = character_uri.split(",", 1)
+                        content_type = header.split(":")[1].split(";")[0]
+                        decoded = base64.b64decode(encoded)
+                        
+                        with open(char_temp_file.name, "wb") as f:
+                            f.write(decoded)
+                            
+                        print(f"Character video test file: {char_temp_file.name}")
+                        
+                        # Try to transcode the video to a format known to work with RunwayML
+                        try:
+                            print("Attempting to transcode character video to ensure compatibility...")
+                            char_transcoded_file = char_temp_file.name + ".transcoded.mp4"
+                            
+                            # Use ffmpeg to transcode to a known good format
+                            cmd = ["ffmpeg", "-i", char_temp_file.name, "-c:v", "libx264", "-preset", "fast", 
+                                   "-pix_fmt", "yuv420p", "-c:a", "aac", "-strict", "experimental", char_transcoded_file]
+                            result = subprocess.run(cmd, capture_output=True, text=True)
+                            
+                            if os.path.exists(char_transcoded_file) and os.path.getsize(char_transcoded_file) > 0:
+                                print(f"✅ Successfully transcoded to H.264. Using this file instead: {char_transcoded_file}")
+                                
+                                # Convert transcoded file to data URI for API use
+                                with open(char_transcoded_file, "rb") as f:
+                                    transcoded_data = f.read()
+                                    transcoded_b64 = base64.b64encode(transcoded_data).decode("utf-8")
+                                    transcoded_character_uri = f"data:video/mp4;base64,{transcoded_b64}"
+                                    print(f"Created data URI from transcoded file (length: {len(transcoded_character_uri)})")
+                            else:
+                                print(f"❌ Failed to transcode video. Error: {result.stderr}")
+                                
+                        except (FileNotFoundError, subprocess.SubprocessError) as e:
+                            print(f"Note: ffmpeg not available, skipping character video transcoding: {str(e)}")
+                    except Exception as e:
+                        print(f"Error during character video validation: {str(e)}")
+                    
+                    # Use transcoded character video if available
+                    if transcoded_character_uri:
+                        print("Using transcoded character video for API request")
+                        task_payload["character"]["uri"] = transcoded_character_uri
                 
                 # Validate reference URI
                 reference_uri = task_payload["reference"]["uri"]
-                validate_data_uri(reference_uri, "reference_video")
+                reference_valid, reference_metadata = validate_data_uri(reference_uri, "reference_video")
                 
-                # Create truncated copy for logging
-                debug_payload = task_payload.copy()
-                # Truncate URIs to avoid flooding logs
-                if "character" in debug_payload and "uri" in debug_payload["character"]:
-                    uri = debug_payload["character"]["uri"]
-                    debug_payload["character"]["uri"] = uri[:50] + "..." + uri[-20:] if len(uri) > 70 else uri
-                if "reference" in debug_payload and "uri" in debug_payload["reference"]:
-                    uri = debug_payload["reference"]["uri"]
-                    debug_payload["reference"]["uri"] = uri[:50] + "..." + uri[-20:] if len(uri) > 70 else uri
+                # Special debug for reference video since that's where we're getting the error
+                transcoded_reference_uri = None  # Will store the transcoded data URI if successful
+                
+                if reference_valid:
+                    print("\n===== REFERENCE VIDEO VALIDATION =====")
                     
-                logger.info(f"RunwayML Act Two: Full payload: {json.dumps(debug_payload, indent=2)}")
-                print(f"DEBUG - RunwayML Act Two Payload: {json.dumps(debug_payload, indent=2)}")
+                    # Additional codec validation
+                    try:
+                        # Make a clean temporary file specifically for media validation
+                        debug_temp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+                        debug_temp_file.close()
+                        
+                        # Extract content
+                        header, encoded = reference_uri.split(",", 1)
+                        content_type = header.split(":")[1].split(";")[0]
+                        decoded = base64.b64decode(encoded)
+                        
+                        with open(debug_temp_file.name, "wb") as f:
+                            f.write(decoded)
+                            
+                        print(f"Reference video test file: {debug_temp_file.name}")
+                        
+                        # Try to transcode the video to a format known to work with RunwayML
+                        try:
+                            print("Attempting to transcode reference video to ensure compatibility...")
+                            transcoded_file = debug_temp_file.name + ".transcoded.mp4"
+                            
+                            # Use ffmpeg to transcode to a known good format
+                            cmd = ["ffmpeg", "-i", debug_temp_file.name, "-c:v", "libx264", "-preset", "fast", 
+                                   "-pix_fmt", "yuv420p", "-c:a", "aac", "-strict", "experimental", transcoded_file]
+                            result = subprocess.run(cmd, capture_output=True, text=True)
+                            
+                            if os.path.exists(transcoded_file) and os.path.getsize(transcoded_file) > 0:
+                                print(f"✅ Successfully transcoded to H.264. Using this file instead: {transcoded_file}")
+                                
+                                # Convert transcoded file to data URI for API use
+                                with open(transcoded_file, "rb") as f:
+                                    transcoded_data = f.read()
+                                    transcoded_b64 = base64.b64encode(transcoded_data).decode("utf-8")
+                                    transcoded_reference_uri = f"data:video/mp4;base64,{transcoded_b64}"
+                                    print(f"Created data URI from transcoded file (length: {len(transcoded_reference_uri)})")
+                                
+                            else:
+                                print(f"❌ Failed to transcode video. Error: {result.stderr}")
+                                
+                        except (FileNotFoundError, subprocess.SubprocessError) as e:
+                            print(f"Note: ffmpeg not available, skipping transcoding: {str(e)}")
+                    except Exception as e:
+                        print(f"Error during reference video validation: {str(e)}")
                 
+                # Use transcoded reference video if available
+                if transcoded_reference_uri:
+                    print("Using transcoded reference video for API request")
+                    task_payload["reference"]["uri"] = transcoded_reference_uri
+
                 # Make direct API call
                 headers = {
                     "Authorization": f"Bearer {api_key}",
@@ -476,6 +645,7 @@ class RunwayML_CharacterPerformance(ControlNode):
                 if response.status_code != 200:
                     error_body = response.text
                     logger.error(f"RunwayML Act Two: API returned {response.status_code}: {error_body}")
+                                    
                     raise ValueError(f"RunwayML API Error ({response.status_code}): {error_body}")
                 
                 response_data = response.json()
