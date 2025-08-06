@@ -1,5 +1,5 @@
 from typing import Optional
-from griptape.artifacts import ImageArtifact, ImageUrlArtifact, BaseArtifact
+from griptape.artifacts import ImageUrlArtifact, BaseArtifact
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import DataNode
 from griptape_nodes.retained_mode.griptape_nodes import logger
@@ -16,7 +16,7 @@ class ReferenceImageArtifact(BaseArtifact):
     
     def __init__(
         self, 
-        image: ImageArtifact | ImageUrlArtifact | str,
+        image: ImageUrlArtifact | str,
         tag: str,
         name: Optional[str] = None,
         **kwargs
@@ -58,11 +58,11 @@ class RunwayML_CreateReferenceImage(DataNode):
         self.add_parameter(
             Parameter(
                 name="image",
-                input_types=["ImageArtifact", "ImageUrlArtifact", "str"],
-                output_type="ImageArtifact",
-                type="ImageArtifact",
+                input_types=["ImageUrlArtifact", "str"],
+                output_type="ImageUrlArtifact",
+                type="ImageUrlArtifact",
                 default_value=None,
-                tooltip="The image to use as a reference. Can be ImageArtifact, ImageUrlArtifact, or URL string. Click to upload a file.",
+                tooltip="The image to use as a reference. Can be ImageUrlArtifact or URL string. Click to upload a file.",
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
                 ui_options={"clickable_file_browser": True}
             )
@@ -129,8 +129,8 @@ class RunwayML_CreateReferenceImage(DataNode):
                 logger.warning(f"CreateReferenceImage: Failed to download/analyze image: {e}")
                 # Continue without validation rather than failing completely
                 
-        elif isinstance(image, ImageArtifact):
-            # ImageArtifact has base64 data, we can analyze it directly
+        elif False:  # isinstance(image, ImageArtifact):
+            # Note: ImageArtifact support removed - use ImageUrlArtifact instead
             try:
                 import base64
                 image_data = io.BytesIO(base64.b64decode(image.base64))

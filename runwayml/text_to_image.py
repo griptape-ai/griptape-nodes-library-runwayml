@@ -8,7 +8,7 @@ import logging
 from typing import Optional
 from PIL import Image
 
-from griptape.artifacts import TextArtifact, UrlArtifact, ImageArtifact, ImageUrlArtifact, ErrorArtifact, BaseArtifact
+from griptape.artifacts import TextArtifact, ImageUrlArtifact, ErrorArtifact, BaseArtifact
 from griptape_nodes.traits.options import Options
 
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, ParameterGroup, ParameterList
@@ -24,7 +24,7 @@ class ReferenceImageArtifact(BaseArtifact):
     
     def __init__(
         self, 
-        image: ImageArtifact | ImageUrlArtifact | str,
+        image: ImageUrlArtifact | str,
         tag: str,
         name: Optional[str] = None,
         **kwargs
@@ -65,30 +65,64 @@ if not debug_logger.handlers:
 SERVICE = "RunwayML"
 API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
 DEFAULT_MODEL = "gen4_image"
+MAX_PROMPT_LENGTH = 1000
 
-# Text-to-image specific ratio values
+def validate_prompt_length(parameter, value):
+    """Validate prompt text does not exceed 1000 characters as per API spec."""
+    if value and len(str(value)) > MAX_PROMPT_LENGTH:
+        raise ValueError(f"Prompt text must be {MAX_PROMPT_LENGTH} characters or less. Current length: {len(str(value))}")
+
+def validate_reference_tag(tag: str) -> str:
+    """Validate and clean a reference image tag according to API requirements."""
+    import re
+    
+    if not tag or not isinstance(tag, str):
+        raise ValueError("Tag cannot be empty")
+    
+    tag = tag.strip()
+    
+    # Check length (3-16 characters)
+    if len(tag) < 3:
+        raise ValueError(f"Tag '{tag}' is too short. Must be 3-16 characters.")
+    if len(tag) > 16:
+        raise ValueError(f"Tag '{tag}' is too long. Must be 3-16 characters.")
+    
+    # Check format: alphanumeric + underscores, must start with letter
+    if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', tag):
+        raise ValueError(f"Tag '{tag}' is invalid. Must start with a letter and contain only letters, numbers, and underscores.")
+    
+    return tag
+
+def generate_auto_tag(index: int) -> str:
+    """Generate an auto tag for reference images."""
+    return f"ref_{index + 1}"
+
+# Text-to-image specific ratio values (sorted by width then height)
 RUNWAY_TEXT_TO_IMAGE_RATIOS = [
-    "1920:1080",
-    "1080:1920",
-    "1024:1024",
-    "1360:768",
-    "1080:1080",
-    "1168:880",
-    "1440:1080",
-    "1080:1440",
-    "1808:768",
-    "2112:912",
-    "1280:720",
-    "720:1280",
     "720:720",
-    "960:720",
     "720:960",
-    "1680:720"
+    "720:1280",
+    "960:720",
+    "1024:1024",
+    "1080:1080",
+    "1080:1440",
+    "1080:1920",
+    "1168:880",
+    "1280:720",
+    "1360:768",
+    "1440:1080",
+    "1680:720",
+    "1808:768",
+    "1920:1080",
+    "2112:912"
 ]
 DEFAULT_TEXT_TO_IMAGE_RATIO = "1024:1024"
 
 
 class RunwayML_TextToImage(ControlNode):
+    # Class variable to track last used seed across instances (ComfyUI-style)
+    _last_used_seed: int = 12345
+    
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self.category = "AI/RunwayML"
@@ -104,9 +138,10 @@ class RunwayML_TextToImage(ControlNode):
                 output_type="str",
                 type="str",
                 default_value="",
-                tooltip="Text prompt describing the desired image. Use @tagname to reference images from connected ReferenceImageArtifact instances (e.g., '@EiffelTower painted in the style of @StarryNight'). To use an image for styling, add it as a reference image with a tag and reference it in this prompt.",
+                tooltip=f"Text prompt describing the desired image (max {MAX_PROMPT_LENGTH} characters). Use @tagname to reference images from connected ReferenceImageArtifact instances (e.g., '@EiffelTower painted in the style of @StarryNight'). To use an image for styling, add it as a reference image with a tag and reference it in this prompt.",
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
                 ui_options={"multiline": True, "placeholder_text": "e.g., @EiffelTower painted in the style of @StarryNight"},
+                validators=[validate_prompt_length]
             )
         self.add_node_element(prompt_group)
 
@@ -126,16 +161,6 @@ class RunwayML_TextToImage(ControlNode):
         # Generation Settings Group
         with ParameterGroup(name="Generation Settings") as gen_settings_group:
             Parameter(
-                name="model",
-                input_types=["str"],
-                output_type="str",
-                type="str",
-                default_value=DEFAULT_MODEL,
-                tooltip="RunwayML model to use for generation.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-                traits={Options(choices=["gen4_image"])}
-            )
-            Parameter(
                 name="ratio",
                 input_types=["str"],
                 output_type="str",
@@ -150,9 +175,29 @@ class RunwayML_TextToImage(ControlNode):
                 input_types=["int"],
                 output_type="int",
                 type="int",
-                default_value=0,
-                tooltip="Seed for generation. 0 for random.",
+                default_value=RunwayML_TextToImage._last_used_seed,
+                tooltip="Seed value for reproducible generation",
+                allowed_modes={ParameterMode.PROPERTY, ParameterMode.INPUT, ParameterMode.OUTPUT},
+            )
+            Parameter(
+                name="seed_control",
+                input_types=["str"],
+                output_type="str",
+                type="str",
+                default_value="randomize",
+                tooltip="Seed control mode: Fixed (use exact value), Increment (+1 each run), Decrement (-1 each run), Randomize (new random each run)",
+                allowed_modes={ParameterMode.PROPERTY},
+                traits={Options(choices=["fixed", "increment", "decrement", "randomize"])}
+            )
+            Parameter(
+                name="content_moderation",
+                input_types=["str"],
+                output_type="str",
+                type="str",
+                default_value="auto",
+                tooltip="Content moderation level. 'auto' uses standard filtering, 'low' is less strict about public figures.",
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+                traits={Options(choices=["auto", "low"])}
             )
         self.add_node_element(gen_settings_group)
 
@@ -179,6 +224,7 @@ class RunwayML_TextToImage(ControlNode):
                 ui_options={"placeholder_text": ""}
             )
         )
+
 
     def _get_image_data_uri(self, image_input) -> str | None:
         """Convert various image input types to data URI or URL format."""
@@ -237,7 +283,8 @@ class RunwayML_TextToImage(ControlNode):
                 logger.error(f"RunwayML T2I: Failed to convert data URI format: {e}")
                 return None
 
-        if isinstance(image_input, ImageArtifact):
+        # Note: ImageArtifact support removed - use ImageUrlArtifact instead
+        if False:  # isinstance(image_input, ImageArtifact):
             logger.info(f"RunwayML T2I: Processing ImageArtifact - media_type: {getattr(image_input, 'media_type', 'N/A')}, has_base64: {bool(getattr(image_input, 'base64', None))}")
             media_type = image_input.media_type or "image/png"
             if not image_input.base64.startswith(f"data:{media_type};base64,"):
@@ -386,7 +433,7 @@ class RunwayML_TextToImage(ControlNode):
                     else:
                         logger.warning(f"RunwayML T2I: Dict URL is not HTTPS or local HTTP: {url_value}")
                         return url_value
-                elif image_input["type"] == "ImageArtifact":
+                elif False:  # image_input["type"] == "ImageArtifact":
                     logger.info(f"RunwayML T2I: Dictionary contains ImageArtifact")
                     # Handle dictionary representation of ImageArtifact
                     if "base64" in image_input:
@@ -463,6 +510,11 @@ class RunwayML_TextToImage(ControlNode):
         prompt_val = self.get_parameter_value("prompt_text")
         if not prompt_val or not str(prompt_val).strip():
             errors.append(ValueError("Text prompt ('prompt_text') cannot be empty."))
+        
+        # Validate content moderation parameter
+        content_mod = self.get_parameter_value("content_moderation")
+        if content_mod not in ["auto", "low"]:
+            errors.append(ValueError("Content moderation must be 'auto' or 'low'."))
 
         # Validate reference images and tags
         ref_images_list = self.get_parameter_value("reference_images") or []
@@ -523,13 +575,16 @@ class RunwayML_TextToImage(ControlNode):
                 if hasattr(image, 'media_type'):
                     logger.error(f"RunwayML T2I validation: Image media_type: {getattr(image, 'media_type', 'N/A')}")
                 
-                # Check if it's a size issue
-                if isinstance(image, ImageArtifact):
-                    media_type = image.media_type or "image/png"
-                    if not image.base64.startswith(f"data:{media_type};base64,"):
-                        test_uri = f"data:{media_type};base64,{image.base64}"
+                                    # Check if it's a size issue  
+                    if hasattr(image, "base64") and hasattr(image, "media_type"):
+                        media_type = getattr(image, "media_type", None) or "image/png"
+                        base64_data = getattr(image, "base64", "")
+                        if not base64_data.startswith(f"data:{media_type};base64,"):
+                            test_uri = f"data:{media_type};base64,{base64_data}"
+                        else:
+                            test_uri = base64_data
                     else:
-                        test_uri = image.base64
+                        test_uri = str(image)  # fallback, may not be valid
                     
                     if len(test_uri.encode('utf-8')) > 5 * 1024 * 1024:
                         errors.append(ValueError(f"Reference image {i+1} (tag: '{tag}') is too large ({len(test_uri.encode('utf-8')) / (1024*1024):.1f}MB). RunwayML has a 5MB limit for data URIs (~3.3MB unencoded). Try using smaller images or HTTPS URLs."))
@@ -554,7 +609,6 @@ class RunwayML_TextToImage(ControlNode):
                 
                 # Get parameter values - create fresh copies to ensure idempotency
                 prompt_text = str(self.get_parameter_value("prompt_text") or "").strip()
-                model_name = str(self.get_parameter_value("model") or DEFAULT_MODEL)
                 
                 ratio_input = self.get_parameter_value("ratio")
                 if isinstance(ratio_input, tuple) and len(ratio_input) == 2:
@@ -562,7 +616,28 @@ class RunwayML_TextToImage(ControlNode):
                 else:
                     ratio_val = str(ratio_input or DEFAULT_TEXT_TO_IMAGE_RATIO)
 
-                seed_val = self.get_parameter_value("seed") or 0
+                seed_value = int(self.get_parameter_value("seed") or RunwayML_TextToImage._last_used_seed)
+                seed_control = self.get_parameter_value("seed_control") or "randomize"
+                content_moderation = self.get_parameter_value("content_moderation") or "auto"
+                
+                # Handle seed control (ComfyUI-style)
+                if seed_control == "fixed":
+                    actual_seed = seed_value
+                elif seed_control == "increment":
+                    actual_seed = RunwayML_TextToImage._last_used_seed + 1
+                elif seed_control == "decrement":
+                    actual_seed = RunwayML_TextToImage._last_used_seed - 1
+                elif seed_control == "randomize":
+                    import random
+                    actual_seed = random.randint(0, 2**32 - 1)
+                else:
+                    actual_seed = seed_value  # fallback
+                
+                # Ensure seed is in valid range for API (0 to 4294967295)
+                actual_seed = max(0, min(actual_seed, 4294967295))
+                
+                # Update last used seed for next run
+                RunwayML_TextToImage._last_used_seed = actual_seed
 
                 # Get fresh copies of reference data to ensure idempotency
                 ref_images_list_raw = self.get_parameter_value("reference_images")
@@ -574,19 +649,6 @@ class RunwayML_TextToImage(ControlNode):
                 processed_reference_images = []
 
                 logger.info(f"RunwayML T2I: Raw reference images list: {len(ref_images_list)} images")
-
-                # Log to file for detailed debugging
-                debug_logger.info("=== REFERENCE IMAGES PROCESSING START ===")
-                debug_logger.info(f"Raw reference images list count: {len(ref_images_list)}")
-                for i, ref_artifact in enumerate(ref_images_list):
-                    if hasattr(ref_artifact, 'image') and hasattr(ref_artifact, 'tag'):
-                        debug_logger.info(f"Image {i+1}: type={type(ref_artifact).__name__}, tag='{ref_artifact.tag}', image_type={type(ref_artifact.image).__name__}")
-                    elif isinstance(ref_artifact, dict):
-                        tag = ref_artifact.get("tag", "N/A")
-                        image_type = type(ref_artifact.get("image", None)).__name__ if ref_artifact.get("image") else "None"
-                        debug_logger.info(f"Image {i+1}: type=dict, tag='{tag}', image_type={image_type}")
-                    else:
-                        debug_logger.info(f"Image {i+1}: type={type(ref_artifact).__name__}, value={getattr(ref_artifact, 'value', 'N/A')}")
 
                 # Process reference images if available
                 if ref_images_list:
@@ -625,14 +687,8 @@ class RunwayML_TextToImage(ControlNode):
                             logger.info(f"RunwayML T2I: Reference image {i+1} has empty tag, using default: '{tag}'")
                         
                         logger.info(f"RunwayML T2I: Processing reference image {i+1} with tag '{tag}': image={type(image).__name__}")
-                        debug_logger.info(f"Processing image {i+1} with tag '{tag}': type={type(image).__name__}")
                         
-                        logger.info(f"RunwayML T2I: Image artifact type: {type(image).__name__}, value preview: {str(image.value)[:100] if hasattr(image, 'value') else 'N/A'}...")
                         image_uri = self._get_image_data_uri(image)
-                        
-                        debug_logger.info(f"Image {i+1} (tag '{tag}') conversion result: success={bool(image_uri)}, length={len(image_uri) if image_uri else 0}")
-                        if image_uri:
-                            debug_logger.info(f"Image {i+1} (tag '{tag}') URI preview: {image_uri[:100]}...")
                         
                         if image_uri:
                             uri_preview = image_uri[:50] + "..." + image_uri[-20:] if len(image_uri) > 70 else image_uri
@@ -646,35 +702,31 @@ class RunwayML_TextToImage(ControlNode):
                                 "tag": str(tag).strip()
                             })
                             logger.info(f"RunwayML T2I: Added reference image with tag '{tag}'")
-                            debug_logger.info(f"Added image {i+1} with tag '{tag}' to processed_reference_images array")
                         else:
                             logger.warning(f"RunwayML T2I: Skipped reference image {i+1} (tag '{tag}') - image_uri={bool(image_uri)}")
-                            debug_logger.warning(f"Skipped image {i+1} (tag '{tag}') - image_uri={bool(image_uri)}")
 
-                debug_logger.info(f"Final processed_reference_images array length: {len(processed_reference_images)}")
-                debug_logger.info("=== REFERENCE IMAGES PROCESSING END ===")
-                debug_logger.info("")
+                logger.info(f"RunwayML T2I: Final processed reference images: {len(processed_reference_images)}")
 
                 # Build task payload with fresh data
                 task_payload = {
-                    "model": model_name,
+                    "model": DEFAULT_MODEL,
                     "promptText": prompt_text,
                     "ratio": ratio_val,
+                    "contentModeration": {
+                        "publicFigureThreshold": content_moderation
+                    }
                 }
 
-                if seed_val and seed_val != 0:
-                    task_payload["seed"] = seed_val
+                if actual_seed != 0:
+                    task_payload["seed"] = actual_seed
 
                 if processed_reference_images:
                     task_payload["referenceImages"] = processed_reference_images
                     logger.info(f"RunwayML T2I: Using {len(processed_reference_images)} reference images")
-                    debug_logger.info(f"Final payload referenceImages: {processed_reference_images}")
-                    debug_logger.info(f"Payload keys: {list(task_payload.keys())}")
                 else:
                     logger.info(f"RunwayML T2I: No valid reference images, not including referenceImages in payload")
 
                 logger.info(f"RunwayML T2I: Creating task with payload keys: {list(task_payload.keys())}")
-                debug_logger.info(f"Full payload structure (without data): {dict((k, v if k != 'referenceImages' else f'[{len(v)} items]') for k, v in task_payload.items())}")
 
                 # Get API key
                 api_key = self.get_config_value(service=SERVICE, value=API_KEY_ENV_VAR)
@@ -754,11 +806,13 @@ class RunwayML_TextToImage(ControlNode):
                             logger.info(f"RunwayML T2I generation succeeded: {image_url}")
                             image_artifact = self._download_and_store_image(image_url, task_id)
                             self.publish_update_to_parameter("image_output", image_artifact)
+                            self.publish_update_to_parameter("seed", actual_seed)
                             return image_artifact
                         else:
                             logger.error(f"RunwayML T2I task SUCCEEDED but no output URL found. Output structure: {output}")
                             err_msg = "RunwayML T2I task SUCCEEDED but no output URL found."
                             self.publish_update_to_parameter("image_output", ErrorArtifact(err_msg))
+                            self.publish_update_to_parameter("seed", actual_seed)
                             return ErrorArtifact(err_msg)
                     
                     elif status == 'FAILED':
@@ -768,11 +822,13 @@ class RunwayML_TextToImage(ControlNode):
                             error_msg += f" Reason: {error_detail}"
                         logger.error(error_msg)
                         self.publish_update_to_parameter("image_output", ErrorArtifact(error_msg))
+                        self.publish_update_to_parameter("seed", actual_seed)
                         return ErrorArtifact(error_msg)
 
                 timeout_msg = f"RunwayML T2I task (ID: {task_id}) timed out after {max_retries * retry_delay} seconds."
                 logger.error(timeout_msg)
                 self.publish_update_to_parameter("image_output", ErrorArtifact(timeout_msg))
+                self.publish_update_to_parameter("seed", actual_seed)
                 return ErrorArtifact(timeout_msg)
 
             except Exception as e:
@@ -792,6 +848,7 @@ class RunwayML_TextToImage(ControlNode):
                 
                 logger.exception(error_message)
                 self.publish_update_to_parameter("image_output", ErrorArtifact(error_message))
+                self.publish_update_to_parameter("seed", actual_seed if 'actual_seed' in locals() else RunwayML_TextToImage._last_used_seed)
                 return ErrorArtifact(error_message)
 
         yield generate_image_async 

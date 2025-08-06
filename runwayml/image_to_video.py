@@ -4,7 +4,7 @@ import runwayml
 from urllib.parse import urlparse
 from typing import Any
 
-from griptape.artifacts import TextArtifact, UrlArtifact, ImageArtifact, ImageUrlArtifact, ErrorArtifact
+from griptape.artifacts import TextArtifact, ImageUrlArtifact, ErrorArtifact
 from griptape_nodes.traits.options import Options
 
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, ParameterGroup
@@ -25,7 +25,7 @@ GEN3A_TURBO_RATIOS = [
 GEN4_DEFAULT_ASPECT_RATIO = "1280:720"
 GEN3A_DEFAULT_ASPECT_RATIO = "1280:768"
 
-class VideoUrlArtifact(UrlArtifact):
+class VideoUrlArtifact(ImageUrlArtifact):
     """
     Artifact that contains a URL to a video.
     """
@@ -46,9 +46,9 @@ class RunwayML_ImageToVideo(ControlNode):
         self.add_parameter(
             Parameter(
                 name="image",
-                input_types=["ImageArtifact", "ImageUrlArtifact", "str"],
-                type="ImageArtifact", 
-                tooltip="Input image (required). Accepts ImageArtifact, ImageUrlArtifact, a public URL string, or a base64 data URI string.",
+                input_types=["ImageUrlArtifact", "str"],
+                type="ImageUrlArtifact", 
+                tooltip="Input image (required). Accepts ImageUrlArtifact, a public URL string, or a base64 data URI string.",
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
             )
         )
@@ -143,7 +143,8 @@ class RunwayML_ImageToVideo(ControlNode):
         if not image_input:
             return None
 
-        if isinstance(image_input, ImageArtifact):
+        # Note: ImageArtifact support removed - use ImageUrlArtifact instead
+        if False:  # isinstance(image_input, ImageArtifact):
             # Convert format to media type
             format_to_media_type = {
                 "JPEG": "image/jpeg",
@@ -215,7 +216,7 @@ class RunwayML_ImageToVideo(ControlNode):
                 if str(url_from_dict).startswith("data:image"):
                     return str(url_from_dict)
                 return str(url_from_dict)
-            elif input_type == "ImageArtifact" and base64_from_dict:
+            elif base64_from_dict:
                 if not str(base64_from_dict).startswith(f"data:{media_type_from_dict};base64,"):
                     return f"data:{media_type_from_dict};base64,{base64_from_dict}"
                 return str(base64_from_dict)
@@ -235,7 +236,7 @@ class RunwayML_ImageToVideo(ControlNode):
 
         image_data = self._get_image_data_uri("image")
         if not image_data:
-            errors.append(ValueError("Image input ('image') is required and must be a valid ImageArtifact, ImageUrlArtifact, public URL, or base64 data URI."))
+            errors.append(ValueError("Image input ('image') is required and must be a valid ImageUrlArtifact, public URL, or base64 data URI."))
         
         prompt_val = self.get_parameter_value("prompt")
         if not prompt_val or not str(prompt_val).strip():
