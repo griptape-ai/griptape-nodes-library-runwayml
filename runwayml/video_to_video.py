@@ -11,7 +11,7 @@ from typing import Any
 from griptape.artifacts import TextArtifact, UrlArtifact, ImageUrlArtifact, ErrorArtifact
 from griptape_nodes.traits.options import Options
 
-from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
+from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, ParameterGroup
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
 from griptape_nodes.retained_mode.griptape_nodes import logger
 
@@ -47,6 +47,7 @@ class RunwayML_VideoToVideo(ControlNode):
         self.metadata["description"] = "We strongly recommend that you install ffmpeg in order to enable video transcoding features in this node."
 
         # Individual parameters
+        # Video Parameter
         self.add_parameter(
             Parameter(
                 name="video",
@@ -56,6 +57,7 @@ class RunwayML_VideoToVideo(ControlNode):
                 allowed_modes={ParameterMode.INPUT, ParameterMode.OUTPUT},
             )
         )
+        # Prompt Parameter
         self.add_parameter(
             Parameter(
                 name="prompt",
@@ -68,54 +70,6 @@ class RunwayML_VideoToVideo(ControlNode):
                 ui_options={"multiline": True, "placeholder_text": "e.g., a cinematic shot of a car driving down a road"},
             )
         )
-        self.add_parameter(
-            Parameter(
-                name="model",
-                input_types=["str"],
-                output_type="str",
-                type="str",
-                default_value=DEFAULT_MODEL,
-                tooltip="RunwayML model to use for generation.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-                traits={Options(choices=["gen4_aleph"])}
-            )
-        )
-        self.add_parameter(
-            Parameter(
-                name="ratio",
-                input_types=["str"],
-                output_type="str",
-                type="str",
-                default_value=DEFAULT_ASPECT_RATIO,
-                tooltip="Aspect ratio for the output video.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-                traits={Options(choices=RATIOS)}
-            )
-        )
-        self.add_parameter(
-            Parameter(
-                name="seed",
-                input_types=["int"],
-                output_type="int",
-                type="int",
-                default_value=RunwayML_VideoToVideo._last_used_seed,
-                tooltip="Seed value for reproducible generation",
-                allowed_modes={ParameterMode.PROPERTY, ParameterMode.INPUT, ParameterMode.OUTPUT},
-            )
-        )
-        self.add_parameter(
-            Parameter(
-                name="seed_control",
-                input_types=["str"],
-                output_type="str",
-                type="str",
-                default_value="randomize",
-                tooltip="Seed control mode: Fixed (use exact value), Increment (+1 each run), Decrement (-1 each run), Randomize (new random each run)",
-                allowed_modes={ParameterMode.PROPERTY},
-                traits={Options(choices=["fixed", "increment", "decrement", "randomize"])}
-            )
-        )
-        
         # Reference Image Parameter
         self.add_parameter(
             Parameter(
@@ -126,9 +80,52 @@ class RunwayML_VideoToVideo(ControlNode):
                 allowed_modes={ParameterMode.INPUT, ParameterMode.OUTPUT},
             )
         )
+
+        # Settings Group
+        with ParameterGroup(name="Settings") as settings_group:
+            Parameter(
+                name="model",
+                input_types=["str"],
+                output_type="str",
+                type="str",
+                default_value=DEFAULT_MODEL,
+                tooltip="RunwayML model to use for generation.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+                traits={Options(choices=["gen4_aleph"])}
+            )
         
-        # Content Moderation
-        self.add_parameter(
+            Parameter(
+                name="ratio",
+                input_types=["str"],
+                output_type="str",
+                type="str",
+                default_value=DEFAULT_ASPECT_RATIO,
+                tooltip="Aspect ratio for the output video.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+                traits={Options(choices=RATIOS)}
+            )
+
+            Parameter(
+                name="seed",
+                input_types=["int"],
+                output_type="int",
+                type="int",
+                default_value=RunwayML_VideoToVideo._last_used_seed,
+                tooltip="Seed value for reproducible generation",
+                allowed_modes={ParameterMode.PROPERTY, ParameterMode.INPUT, ParameterMode.OUTPUT},
+            )
+
+            Parameter(
+                name="seed_control",
+                input_types=["str"],
+                output_type="str",
+                type="str",
+                default_value="randomize",
+                tooltip="Seed control mode: Fixed (use exact value), Increment (+1 each run), Decrement (-1 each run), Randomize (new random each run)",
+                allowed_modes={ParameterMode.PROPERTY},
+                traits={Options(choices=["fixed", "increment", "decrement", "randomize"])}
+            )
+
             Parameter(
                 name="public_figure_threshold",
                 input_types=["str"],
@@ -139,7 +136,8 @@ class RunwayML_VideoToVideo(ControlNode):
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
                 traits={Options(choices=["auto", "low"])}
             )
-        )
+        self.add_node_element(settings_group)
+
 
         # Output Parameters
         self.add_parameter(
