@@ -67,6 +67,15 @@
             }
         },
         {
+            "class_name": "RunwayML_VideoToVideo",
+            "file_path": "video_to_video.py",
+            "metadata": {
+                "category": "video/runwayml",
+                "description": "Generates a video from an input video and a text prompt using the RunwayML video-to-video API.",
+                "display_name": "RunwayML Video-to-Video"
+            }
+        },
+        {
             "class_name": "RunwayML_CreateReferenceImage",
             "file_path": "create_reference_image.py",
             "metadata": {
