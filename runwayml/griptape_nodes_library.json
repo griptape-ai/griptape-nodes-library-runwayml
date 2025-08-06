@@ -49,12 +49,12 @@
     ],
     "nodes": [
         {
-            "class_name": "RunwayML_CharacterPerformance",
-            "file_path": "character_performance.py",
+            "class_name": "RunwayML_ActTwo",
+            "file_path": "act_two.py",
             "metadata": {
                 "category": "video/runwayml",
                 "description": "Generates a character performance video using the RunwayML Act Two API.",
-                "display_name": "RunwayML Character Performance"
+                "display_name": "Runway Act Two"
             }
         },
         {
@@ -63,7 +63,7 @@
             "metadata": {
                 "category": "video/runwayml",
                 "description": "Generates a video from an image and a text prompt using the RunwayML image-to-video API.",
-                "display_name": "RunwayML Image-to-Video"
+                "display_name": "Runway Image-to-Video"
             }
         },
         {
@@ -81,7 +81,7 @@
             "metadata": {
                 "category": "image/runwayml",
                 "description": "Creates a reference image artifact with a tag for use in RunwayML text-to-image generation.",
-                "display_name": "RunwayML Create Reference Image"
+                "display_name": "Runway Create Reference Image"
             }
         },
         {
@@ -90,7 +90,7 @@
             "metadata": {
                 "category": "image/runwayml",
                 "description": "Generates images from text prompts with optional reference images using the RunwayML text-to-image API.",
-                "display_name": "RunwayML Text-to-Image"
+                "display_name": "Runway Text-to-Image"
             }
         }
     ]
