@@ -73,7 +73,7 @@ class RunwayML_ActTwo(ControlNode):
         with ParameterGroup(name="Media Inputs") as media_inputs_group:
             Parameter(
                 name="character_image",
-                input_types=["ImageUrlArtifact", "str"],
+                input_types=["ImageArtifact", "ImageUrlArtifact", "str"],
                 type="ImageUrlArtifact", 
                 tooltip="Input image of the character. Accepts ImageUrlArtifact, a public URL string, or a base64 data URI string.",
                 allowed_modes={ParameterMode.INPUT, ParameterMode.OUTPUT},
