@@ -50,10 +50,10 @@ class RunwayML_VideoToVideo(ControlNode):
         self.add_parameter(
             Parameter(
                 name="video",
-                input_types=["VideoUrlArtifact"],
-                type="ImageUrlArtifact", 
+                input_types=["VideoArtifact", "VideoUrlArtifact"],
+                type="VideoArtifact", 
                 tooltip="Input video (required). Accepts VideoUrlArtifact.",
-                allowed_modes={ParameterMode.INPUT},
+                allowed_modes={ParameterMode.INPUT, ParameterMode.OUTPUT},
             )
         )
         self.add_parameter(
