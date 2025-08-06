@@ -90,8 +90,8 @@ class RunwayML_ActTwo(ControlNode):
             
             Parameter(
                 name="reference_video",
-                input_types=["VideoUrlArtifact"],
-                type="VideoUrlArtifact", 
+                input_types=["VideoArtifact", "VideoUrlArtifact"],
+                type="VideoArtifact", 
                 tooltip="Reference video for the character. Accepts VideoUrlArtifact, a public URL string, or a base64 data URI string.",
                 allowed_modes={ParameterMode.INPUT, ParameterMode.OUTPUT}
             )
