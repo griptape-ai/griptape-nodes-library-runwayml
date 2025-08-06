@@ -1,13 +1,14 @@
 import time
 import base64
-import json  # Used for validation and format checking
+import json
 import os
 import subprocess
 import tempfile
 import requests
 from urllib.parse import urlparse
+from typing import Any
 
-from griptape.artifacts import UrlArtifact, ErrorArtifact
+from griptape.artifacts import TextArtifact, UrlArtifact, ImageUrlArtifact, ErrorArtifact
 from griptape_nodes.traits.options import Options
 
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
@@ -25,7 +26,7 @@ RATIOS = [
 DEFAULT_ASPECT_RATIO = "1280:720"
 
 
-class VideoUrlArtifact(UrlArtifact):
+class VideoUrlArtifact(ImageUrlArtifact):
     """
     Artifact that contains a URL to a video.
     """
@@ -35,6 +36,8 @@ class VideoUrlArtifact(UrlArtifact):
 
 
 class RunwayML_VideoToVideo(ControlNode):
+    # Class variable to track last used seed across instances (ComfyUI-style)
+    _last_used_seed: int = 12345
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self.category = "AI/RunwayML"
@@ -47,9 +50,9 @@ class RunwayML_VideoToVideo(ControlNode):
         self.add_parameter(
             Parameter(
                 name="video",
-                input_types=["VideoArtifact","VideoUrlArtifact", "UrlArtifact", "str"],
-                type="UrlArtifact", 
-                tooltip="Input video (required). Accepts VideoUrlArtifact, UrlArtifact, or a public URL string.",
+                input_types=["VideoUrlArtifact"],
+                type="ImageUrlArtifact", 
+                tooltip="Input video (required). Accepts VideoUrlArtifact.",
                 allowed_modes={ParameterMode.INPUT},
             )
         )
@@ -95,9 +98,21 @@ class RunwayML_VideoToVideo(ControlNode):
                 input_types=["int"],
                 output_type="int",
                 type="int",
-                default_value=0,
-                tooltip="Seed for generation. 0 for random.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+                default_value=RunwayML_VideoToVideo._last_used_seed,
+                tooltip="Seed value for reproducible generation",
+                allowed_modes={ParameterMode.PROPERTY, ParameterMode.INPUT, ParameterMode.OUTPUT},
+            )
+        )
+        self.add_parameter(
+            Parameter(
+                name="seed_control",
+                input_types=["str"],
+                output_type="str",
+                type="str",
+                default_value="randomize",
+                tooltip="Seed control mode: Fixed (use exact value), Increment (+1 each run), Decrement (-1 each run), Randomize (new random each run)",
+                allowed_modes={ParameterMode.PROPERTY},
+                traits={Options(choices=["fixed", "increment", "decrement", "randomize"])}
             )
         )
         
@@ -189,7 +204,7 @@ class RunwayML_VideoToVideo(ControlNode):
             return None
 
         # Handle URL artifacts
-        if isinstance(video_input, (VideoUrlArtifact, UrlArtifact)):
+        if isinstance(video_input, (VideoUrlArtifact, ImageUrlArtifact, UrlArtifact)):
             url_value = video_input.value
             if url_value.startswith("data:video"):
                 return url_value
@@ -293,7 +308,7 @@ class RunwayML_VideoToVideo(ControlNode):
             base64_from_dict = video_input.get("base64")
             media_type_from_dict = video_input.get("media_type", "video/mp4")
 
-            if input_type in ["VideoUrlArtifact", "UrlArtifact"] and url_from_dict:
+            if input_type in ["VideoUrlArtifact", "ImageUrlArtifact", "UrlArtifact"] and url_from_dict:
                 if str(url_from_dict).startswith("data:video"):
                     return str(url_from_dict)
                 return str(url_from_dict)
@@ -519,8 +534,29 @@ class RunwayML_VideoToVideo(ControlNode):
         prompt_text = str(self.get_parameter_value("prompt") or "").strip()
         model_name = str(self.get_parameter_value("model") or DEFAULT_MODEL)
         ratio_val = str(self.get_parameter_value("ratio") or DEFAULT_ASPECT_RATIO)
-        seed_val = self.get_parameter_value("seed") or 0
         public_figure_threshold = str(self.get_parameter_value("public_figure_threshold") or "auto")
+        
+        # Handle seed control (ComfyUI-style)
+        seed_value = int(self.get_parameter_value("seed") or RunwayML_VideoToVideo._last_used_seed)
+        seed_control = self.get_parameter_value("seed_control") or "randomize"
+        
+        if seed_control == "fixed":
+            actual_seed = seed_value
+        elif seed_control == "increment":
+            actual_seed = RunwayML_VideoToVideo._last_used_seed + 1
+        elif seed_control == "decrement":
+            actual_seed = RunwayML_VideoToVideo._last_used_seed - 1
+        elif seed_control == "randomize":
+            import random
+            actual_seed = random.randint(0, 2**32 - 1)
+        else:
+            actual_seed = seed_value  # fallback
+        
+        # Ensure seed is in valid range for API (0 to 4294967295)
+        actual_seed = max(0, min(actual_seed, 4294967295))
+        
+        # Update last used seed for next run
+        RunwayML_VideoToVideo._last_used_seed = actual_seed
         
         # Get video data
         video_uri = self._get_video_data_uri("video")
@@ -548,8 +584,8 @@ class RunwayML_VideoToVideo(ControlNode):
                 }
                 
                 # Add optional seed if non-zero
-                if seed_val and seed_val != 0:
-                    task_payload["seed"] = seed_val
+                if actual_seed != 0:
+                    task_payload["seed"] = actual_seed
                 
                 # Add reference image if provided
                 if reference_image_uri:
@@ -633,11 +669,13 @@ class RunwayML_VideoToVideo(ControlNode):
                             logger.info(f"RunwayML V2V generation succeeded: {video_url}")
                             video_artifact = VideoUrlArtifact(url=video_url, name="runwayml_video_to_video")
                             self.publish_update_to_parameter("video_output", video_artifact)
+                            self.publish_update_to_parameter("seed", actual_seed)
                             return video_artifact
                         else:
                             logger.error(f"RunwayML V2V task SUCCEEDED but no output URL found. Output structure: {output}")
                             err_msg = "RunwayML V2V task SUCCEEDED but no output URL found."
                             self.publish_update_to_parameter("video_output", ErrorArtifact(err_msg))
+                            self.publish_update_to_parameter("seed", actual_seed)
                             return ErrorArtifact(err_msg)
                     
                     elif status == 'FAILED':
@@ -647,11 +685,13 @@ class RunwayML_VideoToVideo(ControlNode):
                             error_msg += f" Reason: {error_detail}"
                         logger.error(error_msg)
                         self.publish_update_to_parameter("video_output", ErrorArtifact(error_msg))
+                        self.publish_update_to_parameter("seed", actual_seed)
                         return ErrorArtifact(error_msg)
 
                 timeout_msg = f"RunwayML V2V task (ID: {task_id}) timed out after {max_retries * retry_delay} seconds."
                 logger.error(timeout_msg)
                 self.publish_update_to_parameter("video_output", ErrorArtifact(timeout_msg))
+                self.publish_update_to_parameter("seed", actual_seed)
                 return ErrorArtifact(timeout_msg)
 
             except Exception as e:
@@ -667,6 +707,7 @@ class RunwayML_VideoToVideo(ControlNode):
                 
                 logger.exception(error_message)
                 self.publish_update_to_parameter("video_output", ErrorArtifact(error_message))
+                self.publish_update_to_parameter("seed", actual_seed if 'actual_seed' in locals() else RunwayML_VideoToVideo._last_used_seed)
                 return ErrorArtifact(error_message)
 
         yield generate_video_async
