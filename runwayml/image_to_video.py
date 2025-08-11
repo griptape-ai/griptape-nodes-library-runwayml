@@ -272,8 +272,8 @@ class RunwayML_ImageToVideo(ControlNode):
 
                 task_payload = {
                     "model": model_name,
-                    "prompt_image": image_data_uri, 
-                    "prompt_text": prompt_text,   
+                    "promptImage": image_data_uri, 
+                    "promptText": prompt_text,   
                     "ratio": ratio_val,
                     "duration": duration_val
                 }
