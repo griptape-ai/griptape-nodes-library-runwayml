@@ -1,5 +1,5 @@
 [project]
-name = "runwayml"
+name = "griptape-runwayml-nodes"
 version = "0.1.0"
 description = "Griptape Nodes for RunwayML"
 authors = [

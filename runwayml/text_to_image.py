@@ -1,10 +1,8 @@
 import time
 import base64
-import runwayml
-import requests
 import io
+import requests
 from urllib.parse import urlparse
-import logging
 from typing import Optional
 from PIL import Image
 
@@ -54,13 +52,7 @@ class ReferenceImageArtifact(BaseArtifact):
     def __repr__(self) -> str:
         return self.to_text()
 
-# Create a file logger for debugging
-debug_logger = logging.getLogger('runwayml_debug')
-debug_logger.setLevel(logging.INFO)
-if not debug_logger.handlers:
-    file_handler = logging.FileHandler('/tmp/runwayml_debug.log')
-    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
-    debug_logger.addHandler(file_handler)
+ 
 
 SERVICE = "RunwayML"
 API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
@@ -128,7 +120,7 @@ class RunwayML_TextToImage(ControlNode):
         self.category = "AI/RunwayML"
         self.description = "Generates images from text prompts with optional reference images using RunwayML."
         self.metadata["author"] = "Griptape"
-        self.metadata["dependencies"] = {"pip_dependencies": ["runwayml", "requests", "Pillow"]}
+        self.metadata["dependencies"] = {"pip_dependencies": ["requests", "Pillow"]}
 
         # Main Prompt Group
         with ParameterGroup(name="Prompt") as prompt_group:
@@ -283,29 +275,7 @@ class RunwayML_TextToImage(ControlNode):
                 logger.error(f"RunwayML T2I: Failed to convert data URI format: {e}")
                 return None
 
-        # Note: ImageArtifact support removed - use ImageUrlArtifact instead
-        if False:  # isinstance(image_input, ImageArtifact):
-            logger.info(f"RunwayML T2I: Processing ImageArtifact - media_type: {getattr(image_input, 'media_type', 'N/A')}, has_base64: {bool(getattr(image_input, 'base64', None))}")
-            media_type = image_input.media_type or "image/png"
-            if not image_input.base64.startswith(f"data:{media_type};base64,"):
-                data_uri = f"data:{media_type};base64,{image_input.base64}"
-            else:
-                data_uri = image_input.base64
-            
-            # Validate and convert if necessary
-            validated_uri = _validate_and_convert_data_uri(data_uri)
-            if not validated_uri:
-                logger.warning(f"RunwayML T2I: Failed to validate/convert ImageArtifact")
-                return None
-            
-            # Check size limit (5MB for encoded data URI)
-            if len(validated_uri.encode('utf-8')) > 5 * 1024 * 1024:
-                logger.warning(f"RunwayML T2I: ImageArtifact data URI exceeds 5MB limit ({len(validated_uri.encode('utf-8')) / (1024*1024):.1f}MB)")
-                return None
-            
-            logger.info(f"RunwayML T2I: Successfully processed ImageArtifact ({len(validated_uri)} chars)")
-            return validated_uri
-        elif isinstance(image_input, ImageUrlArtifact):
+        if isinstance(image_input, ImageUrlArtifact):
             logger.info(f"RunwayML T2I: Processing ImageUrlArtifact - value: {getattr(image_input, 'value', 'N/A')[:100]}...")
             url_value = image_input.value
             if url_value.startswith("data:image"):
@@ -433,31 +403,7 @@ class RunwayML_TextToImage(ControlNode):
                     else:
                         logger.warning(f"RunwayML T2I: Dict URL is not HTTPS or local HTTP: {url_value}")
                         return url_value
-                elif False:  # image_input["type"] == "ImageArtifact":
-                    logger.info(f"RunwayML T2I: Dictionary contains ImageArtifact")
-                    # Handle dictionary representation of ImageArtifact
-                    if "base64" in image_input:
-                        media_type = image_input.get("media_type", "image/png")
-                        base64_data = image_input["base64"]
-                        
-                        if not base64_data.startswith(f"data:{media_type};base64,"):
-                            data_uri = f"data:{media_type};base64,{base64_data}"
-                        else:
-                            data_uri = base64_data
-                        
-                        # Validate and convert the data URI
-                        validated_uri = _validate_and_convert_data_uri(data_uri)
-                        if not validated_uri:
-                            logger.warning(f"RunwayML T2I: Failed to validate/convert dict ImageArtifact data URI")
-                            return None
-                        
-                        # Check size limit (5MB for encoded data URI)
-                        if len(validated_uri.encode('utf-8')) > 5 * 1024 * 1024:
-                            logger.warning(f"RunwayML T2I: Dict ImageArtifact data URI exceeds 5MB limit ({len(validated_uri.encode('utf-8')) / (1024*1024):.1f}MB)")
-                            return None
-                        
-                        logger.info(f"RunwayML T2I: Successfully processed dict ImageArtifact ({len(validated_uri)} chars)")
-                        return validated_uri
+                
             
             logger.warning(f"RunwayML T2I: Dictionary does not contain expected image artifact structure: {list(image_input.keys())}")
             return None

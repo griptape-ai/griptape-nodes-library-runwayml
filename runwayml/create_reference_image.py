@@ -129,25 +129,7 @@ class RunwayML_CreateReferenceImage(DataNode):
                 logger.warning(f"CreateReferenceImage: Failed to download/analyze image: {e}")
                 # Continue without validation rather than failing completely
                 
-        elif False:  # isinstance(image, ImageArtifact):
-            # Note: ImageArtifact support removed - use ImageUrlArtifact instead
-            try:
-                import base64
-                image_data = io.BytesIO(base64.b64decode(image.base64))
-                img = Image.open(image_data)
-                aspect_ratio = img.width / img.height
-                
-                logger.info(f"CreateReferenceImage: Image dimensions: {img.width}x{img.height}, aspect ratio: {aspect_ratio:.2f}")
-                
-                if not 0.5 <= aspect_ratio <= 2.0:
-                    logger.warning(f"CreateReferenceImage: Image aspect ratio {aspect_ratio:.2f} is outside valid range (0.5-2.0)")
-                    self.parameter_output_values["reference_image"] = None
-                    return
-                    
-            except Exception as e:
-                logger.warning(f"CreateReferenceImage: Failed to analyze ImageArtifact: {e}")
-                # Continue without validation rather than failing completely
-                
+        
         elif isinstance(image, dict) and "meta" in image and "aspectRatio" in image["meta"]:
             # Handle dict format with meta information
             aspect_ratio = image["meta"]["aspectRatio"]

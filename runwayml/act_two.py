@@ -4,7 +4,6 @@ import json
 import os
 import subprocess
 import tempfile
-import runwayml
 import requests
 from urllib.parse import urlparse
 from typing import Any
@@ -53,7 +52,7 @@ class RunwayML_ActTwo(ControlNode):
         self.category = "AI/RunwayML"
         self.description = "Generates a character performance video using RunwayML's Act Two API."
         self.metadata["author"] = "Griptape"
-        self.metadata["dependencies"] = {"pip_dependencies": ["runwayml", "requests"]}
+        self.metadata["dependencies"] = {"pip_dependencies": ["requests"]}
             
         # Character Type Group
         with ParameterGroup(name="Character Type") as character_type_group:

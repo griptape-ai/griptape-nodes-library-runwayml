@@ -1,6 +1,6 @@
 import time
 import base64
-import runwayml
+import requests
 from urllib.parse import urlparse
 from typing import Any
 
@@ -40,7 +40,7 @@ class RunwayML_ImageToVideo(ControlNode):
         self.category = "AI/RunwayML"
         self.description = "Generates a video from an image and prompt using RunwayML."
         self.metadata["author"] = "Griptape"
-        self.metadata["dependencies"] = {"pip_dependencies": ["runwayml", "requests"]}
+        self.metadata["dependencies"] = {"pip_dependencies": ["requests"]}
 
         # Individual parameters (following Kling pattern)
         self.add_parameter(
@@ -143,20 +143,7 @@ class RunwayML_ImageToVideo(ControlNode):
         if not image_input:
             return None
 
-        # Note: ImageArtifact support removed - use ImageUrlArtifact instead
-        if False:  # isinstance(image_input, ImageArtifact):
-            # Convert format to media type
-            format_to_media_type = {
-                "JPEG": "image/jpeg",
-                "PNG": "image/png",
-                "WEBP": "image/webp",
-                "GIF": "image/gif"
-            }
-            media_type = format_to_media_type.get(image_input.format, "image/png")
-            if not image_input.base64.startswith(f"data:{media_type};base64,"):
-                 return f"data:{media_type};base64,{image_input.base64}"
-            return image_input.base64
-        elif isinstance(image_input, ImageUrlArtifact):
+        if isinstance(image_input, ImageUrlArtifact):
             url_value = image_input.value
             if url_value.startswith("data:image"):
                 return url_value
@@ -283,8 +270,6 @@ class RunwayML_ImageToVideo(ControlNode):
             try:
                 api_key = self.get_config_value(service=SERVICE, value=API_KEY_ENV_VAR)
 
-                client = runwayml.RunwayML(api_key=api_key)
-
                 task_payload = {
                     "model": model_name,
                     "prompt_image": image_data_uri, 
@@ -302,9 +287,28 @@ class RunwayML_ImageToVideo(ControlNode):
                 logger.info(f"RunwayML I2V: Creating task with payload keys: {list(task_payload.keys())}")
                 logger.info(f"RunwayML I2V: Prompt text: '{prompt_text}'")
                 
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "X-Runway-Version": "2024-11-06"
+                }
+
                 # Create a new image-to-video task
-                image_to_video_task = client.image_to_video.create(**task_payload)
-                task_id = image_to_video_task.id
+                response = requests.post(
+                    "https://api.dev.runwayml.com/v1/image_to_video",
+                    json=task_payload,
+                    headers=headers,
+                    timeout=60
+                )
+                if response.status_code != 200:
+                    error_body = response.text
+                    logger.error(f"RunwayML I2V: API returned {response.status_code}: {error_body}")
+                    raise ValueError(f"RunwayML API Error ({response.status_code}): {error_body}")
+
+                task_response = response.json()
+                task_id = task_response.get("id")
+                if not task_id:
+                    raise ValueError(f"No task ID returned from RunwayML API. Response: {task_response}")
                 self.publish_update_to_parameter("task_id_output", task_id)
                 logger.info(f"RunwayML I2V: Task created with ID: {task_id}")
 
@@ -314,22 +318,31 @@ class RunwayML_ImageToVideo(ControlNode):
 
                 for attempt in range(max_retries):
                     time.sleep(retry_delay)
-                    task_status = client.tasks.retrieve(task_id)
-                    status = task_status.status
+                    status_response = requests.get(
+                        f"https://api.dev.runwayml.com/v1/tasks/{task_id}",
+                        headers=headers,
+                        timeout=30
+                    )
+                    status_response.raise_for_status()
+                    task_status = status_response.json()
+                    status = task_status.get("status")
                     
                     logger.info(f"RunwayML I2V generation status (Task ID: {task_id}): {status} (Attempt {attempt + 1}/{max_retries})")
 
                     if status == 'SUCCEEDED':
                         video_url = None
-                        if task_status.output:
-                            if isinstance(task_status.output, list) and len(task_status.output) > 0:
-                                output_item = task_status.output[0]
-                                if hasattr(output_item, 'url') and isinstance(getattr(output_item, 'url', None), str):
-                                    video_url = getattr(output_item, 'url')
+                        output = task_status.get("output")
+                        if output:
+                            if isinstance(output, list) and len(output) > 0:
+                                output_item = output[0]
+                                if isinstance(output_item, dict) and "url" in output_item:
+                                    video_url = output_item["url"]
                                 elif isinstance(output_item, str) and output_item.startswith(('http://', 'https://')):
                                     video_url = output_item
-                            elif hasattr(task_status.output, 'url') and isinstance(getattr(task_status.output, 'url', None), str):
-                                video_url = getattr(task_status.output, 'url')
+                            elif isinstance(output, dict) and "url" in output:
+                                video_url = output["url"]
+                            elif isinstance(output, str) and output.startswith(('http://', 'https://')):
+                                video_url = output
 
                         if video_url:
                             logger.info(f"RunwayML I2V generation succeeded: {video_url}")

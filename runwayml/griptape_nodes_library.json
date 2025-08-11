@@ -24,8 +24,8 @@
         ],
         "dependencies": {
             "pip_dependencies": [
-                "runwayml",
-                "requests"
+                "requests",
+                "Pillow"
             ]
         }
     },
@@ -82,6 +82,15 @@
                 "category": "image/runwayml",
                 "description": "Generates images from text prompts with optional reference images using the RunwayML text-to-image API.",
                 "display_name": "Runway Text-to-Image"
+            }
+        },
+        {
+            "class_name": "RunwayML_VideoUpscale",
+            "file_path": "video_upscale.py",
+            "metadata": {
+                "category": "video/runwayml",
+                "description": "Upscales a video using the RunwayML video_upscale API.",
+                "display_name": "Runway Video Upscale"
             }
         }
     ]
