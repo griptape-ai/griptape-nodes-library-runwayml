@@ -82,7 +82,7 @@ class RunwayML_VideoToVideo(ControlNode):
         )
 
         # Settings Group
-        with ParameterGroup(name="Settings") as settings_group:
+        with ParameterGroup(name="Generation Settings") as settings_group:
             Parameter(
                 name="model",
                 input_types=["str"],

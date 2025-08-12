@@ -72,7 +72,7 @@
             "metadata": {
                 "category": "video/runwayml",
                 "description": "Generates a video from an input video and a text prompt using the RunwayML video-to-video API.",
-                "display_name": "RunwayML Video-to-Video"
+                "display_name": "Runway Video-to-Video"
             }
         },
         {
