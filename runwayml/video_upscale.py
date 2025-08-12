@@ -230,7 +230,7 @@ class RunwayML_VideoUpscale(ControlNode):
             try:
                 api_key = self.get_config_value(service=SERVICE, value=API_KEY_ENV_VAR)
 
-                payload = {"model": model_name, "video_uri": video_uri}
+                payload = {"model": model_name, "videoUri": video_uri}
                 logger.info(
                     f"RunwayML VideoUpscale: Creating task with payload keys: {list(payload.keys())}"
                 )
