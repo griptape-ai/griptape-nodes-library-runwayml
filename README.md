@@ -91,6 +91,15 @@ Generates a video from an input video and a text prompt using RunwayML's Video-t
 | `task_id_output`        | `str`                                                               | **Output:** The Task ID of the generation job from RunwayML.                                                                 | `None`          |
 
 
+## RunwayML Video Upscale
+
+Upscaled a video by a factor of 4X, capped at a maximum of 4096px along each side.
+
+| Parameter                | Type                                                                | Description                                                                                                                 | Default Value   |
+|-------------------------|---------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|-----------------|
+| `video`                 | `VideoUrlArtifact` / `UrlArtifact` / `str`                          | Input video (required). Accepts VideoUrlArtifact, UrlArtifact, or a public URL string.                                       | `None`          |
+
+
 ## Add your library to your installed Engine! 
 
 If you haven't already installed your Griptape Nodes engine, follow the installation steps [HERE](https://github.com/griptape-ai/griptape-nodes).
