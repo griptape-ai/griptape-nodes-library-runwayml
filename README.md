@@ -93,7 +93,7 @@ Generates a video from an input video and a text prompt using RunwayML's Video-t
 
 ## RunwayML Video Upscale
 
-Upscaled a video by a factor of 4X, capped at a maximum of 4096px along each side.
+Upscale a video by a factor of 4X, capped at a maximum of 4096px along each side.
 
 | Parameter                | Type                                                                | Description                                                                                                                 | Default Value   |
 |-------------------------|---------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|-----------------|
