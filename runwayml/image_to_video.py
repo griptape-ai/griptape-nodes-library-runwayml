@@ -9,7 +9,7 @@ from griptape_nodes.traits.options import Options
 
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, ParameterGroup
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode, BaseNode
-from griptape_nodes.retained_mode.griptape_nodes import logger
+from griptape_nodes.retained_mode.griptape_nodes import logger, GriptapeNodes
 
 SERVICE = "RunwayML"
 API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
@@ -244,6 +244,38 @@ class RunwayML_ImageToVideo(ControlNode):
         return super().after_value_set(parameter, value)
 
 
+    def _download_and_store_video(self, video_url: str, task_id: str | None = None) -> VideoUrlArtifact:
+        try:
+            logger.info(f"RunwayML I2V: Downloading video from {video_url}")
+            response = requests.get(video_url, timeout=60)
+            response.raise_for_status()
+
+            content_type = response.headers.get("Content-Type", "video/mp4").lower()
+            if "quicktime" in content_type or content_type.endswith("/mov"):
+                extension = "mov"
+            elif "webm" in content_type:
+                extension = "webm"
+            elif "ogg" in content_type:
+                extension = "ogv"
+            elif "h264" in content_type or "mp4" in content_type or "mpeg4" in content_type:
+                extension = "mp4"
+            else:
+                extension = "mp4"
+
+            if task_id:
+                filename = f"runwayml_image_to_video_{task_id}.{extension}"
+            else:
+                filename = f"runwayml_image_to_video_{int(time.time() * 1000)}.{extension}"
+
+            logger.info(f"RunwayML I2V: Saving video bytes to static storage as {filename}...")
+            static_url = GriptapeNodes.StaticFilesManager().save_static_file(response.content, filename)
+            logger.info(f"RunwayML I2V: ✅ Video saved. URL: {static_url}")
+            return VideoUrlArtifact(url=static_url, name="runwayml_video")
+        except Exception as e:
+            logger.error(f"RunwayML I2V: Failed to download and store video: {e}")
+            return VideoUrlArtifact(url=video_url, name="runwayml_video")
+
+
     def process(self) -> AsyncResult:
         validation_errors = self.validate_node()
         if validation_errors:
@@ -346,7 +378,7 @@ class RunwayML_ImageToVideo(ControlNode):
 
                         if video_url:
                             logger.info(f"RunwayML I2V generation succeeded: {video_url}")
-                            video_artifact = VideoUrlArtifact(url=video_url, name="runwayml_video")
+                            video_artifact = self._download_and_store_video(video_url, task_id)
                             self.publish_update_to_parameter("video_output", video_artifact)
                             return video_artifact
                         else:

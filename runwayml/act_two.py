@@ -13,7 +13,7 @@ from griptape_nodes.traits.options import Options
 
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, ParameterGroup
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode, BaseNode
-from griptape_nodes.retained_mode.griptape_nodes import logger
+from griptape_nodes.retained_mode.griptape_nodes import logger, GriptapeNodes
 
 SERVICE = "RunwayML"
 API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
@@ -422,6 +422,37 @@ class RunwayML_ActTwo(ControlNode):
             body_control = True
         public_figure_threshold = self.get_parameter_value("public_figure_threshold") or "auto"
             
+        def _download_and_store_video(video_url: str, task_id: str | None = None) -> VideoUrlArtifact:
+            try:
+                logger.info(f"RunwayML Act Two: Downloading video from {video_url}")
+                response = requests.get(video_url, timeout=60)
+                response.raise_for_status()
+
+                content_type = response.headers.get("Content-Type", "video/mp4").lower()
+                if "quicktime" in content_type or content_type.endswith("/mov"):
+                    extension = "mov"
+                elif "webm" in content_type:
+                    extension = "webm"
+                elif "ogg" in content_type:
+                    extension = "ogv"
+                elif "h264" in content_type or "mp4" in content_type or "mpeg4" in content_type:
+                    extension = "mp4"
+                else:
+                    extension = "mp4"
+
+                if task_id:
+                    filename = f"runwayml_act_two_{task_id}.{extension}"
+                else:
+                    filename = f"runwayml_act_two_{int(time.time() * 1000)}.{extension}"
+
+                logger.info(f"RunwayML Act Two: Saving video bytes to static storage as {filename}...")
+                static_url = GriptapeNodes.StaticFilesManager().save_static_file(response.content, filename)
+                logger.info(f"RunwayML Act Two: ✅ Video saved. URL: {static_url}")
+                return VideoUrlArtifact(url=static_url, name="runwayml_character_video")
+            except Exception as e:
+                logger.error(f"RunwayML Act Two: Failed to download and store video: {e}")
+                return VideoUrlArtifact(url=video_url, name="runwayml_character_video")
+
         def generate_character_performance_async() -> VideoUrlArtifact | ErrorArtifact:
             try:
                 api_key = self.get_config_value(service=SERVICE, value=API_KEY_ENV_VAR)
@@ -521,7 +552,7 @@ class RunwayML_ActTwo(ControlNode):
 
                         if video_url:
                             logger.info(f"RunwayML Act Two generation succeeded: {video_url}")
-                            video_artifact = VideoUrlArtifact(url=video_url, name="runwayml_character_video")
+                            video_artifact = _download_and_store_video(video_url, task_id)
                             self.publish_update_to_parameter("video_output", video_artifact)
                             self.publish_update_to_parameter("seed", actual_seed)
                             return video_artifact
