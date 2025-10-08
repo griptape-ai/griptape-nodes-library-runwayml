@@ -190,7 +190,7 @@ class RunwayML_VideoUpscale(ControlNode):
     # --- Execution ---
     def validate_node(self) -> list[Exception] | None:
         errors: list[Exception] = []
-        api_key = self.get_config_value(service=SERVICE, value=API_KEY_ENV_VAR)
+        api_key = GriptapeNodes.SecretsManager().get_secret(API_KEY_ENV_VAR)
         if not api_key:
             errors.append(
                 ValueError(
@@ -228,7 +228,7 @@ class RunwayML_VideoUpscale(ControlNode):
 
         def upscale_async() -> VideoUrlArtifact | ErrorArtifact:
             try:
-                api_key = self.get_config_value(service=SERVICE, value=API_KEY_ENV_VAR)
+                api_key = GriptapeNodes.SecretsManager().get_secret(API_KEY_ENV_VAR)
 
                 payload = {"model": model_name, "videoUri": video_uri}
                 logger.info(

@@ -3,10 +3,12 @@
     "library_schema_version": "0.1.0",
     "settings": [
         {
-            "description": "Environment variables for RunwayML API access",
-            "category": "nodes.RunwayML",
+            "description": "API keys required by nodes in this library",
+            "category": "app_events.on_app_initialization_complete",
             "contents": {
-                "RUNWAYML_API_SECRET": "$RUNWAYML_API_SECRET"
+                "secrets_to_register": [
+                    "RUNWAYML_API_SECRET"
+                ]
             }
         }
     ],

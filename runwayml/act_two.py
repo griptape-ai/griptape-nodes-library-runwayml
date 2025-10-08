@@ -329,7 +329,7 @@ class RunwayML_ActTwo(ControlNode):
 
     def validate_node(self) -> list[Exception] | None:
         errors = []
-        api_key = self.get_config_value(service=SERVICE, value=API_KEY_ENV_VAR)
+        api_key = GriptapeNodes.SecretsManager().get_secret(API_KEY_ENV_VAR)
 
         if not api_key:
             errors.append(ValueError(f"RunwayML API key not found. Set {API_KEY_ENV_VAR} in environment variables or Griptape Cloud."))
@@ -455,7 +455,7 @@ class RunwayML_ActTwo(ControlNode):
 
         def generate_character_performance_async() -> VideoUrlArtifact | ErrorArtifact:
             try:
-                api_key = self.get_config_value(service=SERVICE, value=API_KEY_ENV_VAR)
+                api_key = GriptapeNodes.SecretsManager().get_secret(API_KEY_ENV_VAR)
 
                 # Build the payload according to the API format
                 task_payload = {
