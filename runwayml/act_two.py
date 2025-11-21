@@ -15,6 +15,8 @@ from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, Parame
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode, BaseNode
 from griptape_nodes.retained_mode.griptape_nodes import logger, GriptapeNodes
 
+from griptape_nodes_library.utils.video_utils import dict_to_video_url_artifact
+
 SERVICE = "RunwayML"
 API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
 DEFAULT_MODEL = "act_two"
@@ -68,8 +70,40 @@ class RunwayML_ActTwo(ControlNode):
             )
         self.add_node_element(character_type_group)
 
-        # Media Inputs Group
-        with ParameterGroup(name="Media Inputs") as media_inputs_group:
+        # Media Inputs
+
+        self.add_parameter(
+            Parameter(
+                name="character_video",
+                input_types=["VideoUrlArtifact", "VideoArtifact"],
+                type="VideoUrlArtifact",
+                tooltip="The video to process",
+                ui_options={
+                    "clickable_file_browser": True,
+                    "expander": True,
+                    "display_name": "Video or Path to Video",
+                },
+                converters=[self._convert_video_input],
+            )
+        )
+
+        self.add_parameter(
+            Parameter(
+                name="reference_video",
+                input_types=["VideoUrlArtifact", "VideoArtifact"],
+                type="VideoUrlArtifact",
+                tooltip="The video to process",
+                ui_options={
+                    "clickable_file_browser": True,
+                    "expander": True,
+                    "display_name": "Video or Path to Video",
+                },
+                converters=[self._convert_video_input],
+            )
+        )
+
+
+        self.add_parameter(
             Parameter(
                 name="character_image",
                 input_types=["ImageArtifact", "ImageUrlArtifact", "str"],
@@ -78,23 +112,9 @@ class RunwayML_ActTwo(ControlNode):
                 allowed_modes={ParameterMode.INPUT, ParameterMode.OUTPUT},
                 ui_options={"clickable_file_browser": True}
             )
-            
-            Parameter(
-                name="character_video",
-                input_types=["VideoUrlArtifact"],
-                type="VideoUrlArtifact", 
-                tooltip="Character video for the performance. Accepts VideoUrlArtifact, a public URL string, or a base64 data URI string.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.OUTPUT}
-            )
-            
-            Parameter(
-                name="reference_video",
-                input_types=["VideoArtifact", "VideoUrlArtifact"],
-                type="VideoArtifact", 
-                tooltip="Reference video for the character. Accepts VideoUrlArtifact, a public URL string, or a base64 data URI string.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.OUTPUT}
-            )
-        self.add_node_element(media_inputs_group)
+        )
+        
+
 
         # Settings Group
         with ParameterGroup(name="Settings") as settings_group:
@@ -208,6 +228,12 @@ class RunwayML_ActTwo(ControlNode):
         elif character_type == "video":
             self.hide_parameter_by_name("character_image")
             self.show_parameter_by_name("character_video")
+
+    def _convert_video_input(self, value: Any) -> Any:
+        """Convert video input (dict or VideoUrlArtifact) to VideoUrlArtifact."""
+        if isinstance(value, dict):
+            return dict_to_video_url_artifact(value)
+        return value
 
     def after_value_set(self, parameter: Parameter, value) -> None:
         """Called after a parameter value is set. Handle dynamic UI updates."""

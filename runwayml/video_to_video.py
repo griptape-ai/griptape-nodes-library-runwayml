@@ -15,6 +15,8 @@ from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, Parame
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
 from griptape_nodes.retained_mode.griptape_nodes import logger, GriptapeNodes
 
+from griptape_nodes_library.utils.video_utils import dict_to_video_url_artifact
+
 SERVICE = "RunwayML"
 API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
 DEFAULT_MODEL = "gen4_aleph"
@@ -51,10 +53,15 @@ class RunwayML_VideoToVideo(ControlNode):
         self.add_parameter(
             Parameter(
                 name="video",
-                input_types=["VideoArtifact", "VideoUrlArtifact"],
-                type="VideoArtifact", 
+                input_types=["VideoUrlArtifact", "VideoArtifact"],
+                type="VideoUrlArtifact",
                 tooltip="The video to process",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.OUTPUT},
+                ui_options={
+                    "clickable_file_browser": True,
+                    "expander": True,
+                    "display_name": "Video or Path to Video",
+                },
+                converters=[self._convert_video_input],
             )
         )
         # Prompt Parameter
@@ -191,6 +198,13 @@ class RunwayML_VideoToVideo(ControlNode):
             logger.warning(f"RunwayML V2V: Error during video transcoding: {str(e)}")
             return None
     
+    def _convert_video_input(self, value: Any) -> Any:
+        """Convert video input (dict or VideoUrlArtifact) to VideoUrlArtifact."""
+        if isinstance(value, dict):
+            return dict_to_video_url_artifact(value)
+        return value
+
+
     def _get_video_data_uri(self, param_name: str) -> str | None:
         """
         Gets a video URL or converts to data URI if needed.

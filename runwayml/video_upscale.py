@@ -11,6 +11,8 @@ from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
 from griptape_nodes.retained_mode.griptape_nodes import logger, GriptapeNodes
 
+from griptape_nodes_library.utils.video_utils import dict_to_video_url_artifact
+
 # Reuse the VideoUrlArtifact defined alongside ImageUrlArtifact in existing node
 # Define a lightweight VideoUrlArtifact locally to avoid package import issues
 class VideoUrlArtifact(ImageUrlArtifact):
@@ -41,13 +43,19 @@ class RunwayML_VideoUpscale(ControlNode):
         self.add_parameter(
             Parameter(
                 name="video",
-                input_types=["VideoUrlArtifact", "str"],
+                input_types=["VideoUrlArtifact", "VideoArtifact"],
                 type="VideoUrlArtifact",
                 tooltip=(
                     "Input video (HTTPS URL or data URI). Allowed content-types: video/mp4, video/webm, "
                     "video/quicktime, video/mov, video/ogg, video/h264. Max 16MB; max duration 40s."
                 ),
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+                ui_options={
+                    "clickable_file_browser": True,
+                    "expander": True,
+                    "display_name": "Video or Path to Video",
+                },
+                converters=[self._convert_video_input],
             )
         )
 
@@ -90,6 +98,12 @@ class RunwayML_VideoUpscale(ControlNode):
         )
 
     # --- Helpers ---
+    def _convert_video_input(self, value: Any) -> Any:
+        """Convert video input (dict or VideoUrlArtifact) to VideoUrlArtifact."""
+        if isinstance(value, dict):
+            return dict_to_video_url_artifact(value)
+        return value
+
     def _get_video_uri(self) -> str | None:
         src = self.get_parameter_value("video")
         if not src:
