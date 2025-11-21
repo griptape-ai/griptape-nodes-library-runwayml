@@ -53,7 +53,7 @@ class RunwayML_VideoToVideo(ControlNode):
                 name="video",
                 input_types=["VideoArtifact", "VideoUrlArtifact"],
                 type="VideoArtifact", 
-                tooltip="Input video (required). Accepts VideoUrlArtifact.",
+                tooltip="The video to process",
                 allowed_modes={ParameterMode.INPUT, ParameterMode.OUTPUT},
             )
         )
