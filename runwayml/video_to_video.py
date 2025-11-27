@@ -15,7 +15,7 @@ from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, Parame
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
 from griptape_nodes.retained_mode.griptape_nodes import logger, GriptapeNodes
 
-from griptape_nodes_library.utils.video_utils import dict_to_video_url_artifact
+from runwayml.utils.video_utils import dict_to_video_url_artifact
 
 SERVICE = "RunwayML"
 API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
