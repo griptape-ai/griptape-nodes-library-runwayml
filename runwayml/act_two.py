@@ -6,7 +6,6 @@ import subprocess
 import tempfile
 import requests
 from urllib.parse import urlparse
-from typing import Any
 
 from griptape.artifacts import TextArtifact, ImageUrlArtifact, ErrorArtifact
 from griptape_nodes.traits.options import Options
@@ -14,8 +13,6 @@ from griptape_nodes.traits.options import Options
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, ParameterGroup
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode, BaseNode
 from griptape_nodes.retained_mode.griptape_nodes import logger, GriptapeNodes
-
-from griptape_nodes_library.utils.video_utils import dict_to_video_url_artifact
 
 SERVICE = "RunwayML"
 API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
@@ -83,7 +80,6 @@ class RunwayML_ActTwo(ControlNode):
                     "expander": True,
                     "display_name": "Video or Path to Video",
                 },
-                converters=[self._convert_video_input],
             )
         )
 
@@ -98,7 +94,6 @@ class RunwayML_ActTwo(ControlNode):
                     "expander": True,
                     "display_name": "Video or Path to Video",
                 },
-                converters=[self._convert_video_input],
             )
         )
 
@@ -228,12 +223,6 @@ class RunwayML_ActTwo(ControlNode):
         elif character_type == "video":
             self.hide_parameter_by_name("character_image")
             self.show_parameter_by_name("character_video")
-
-    def _convert_video_input(self, value: Any) -> Any:
-        """Convert video input (dict or VideoUrlArtifact) to VideoUrlArtifact."""
-        if isinstance(value, dict):
-            return dict_to_video_url_artifact(value)
-        return value
 
     def after_value_set(self, parameter: Parameter, value) -> None:
         """Called after a parameter value is set. Handle dynamic UI updates."""
