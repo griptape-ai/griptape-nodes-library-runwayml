@@ -13,6 +13,7 @@ from griptape_nodes.traits.options import Options
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, ParameterGroup
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode, BaseNode
 from griptape_nodes.retained_mode.griptape_nodes import logger, GriptapeNodes
+from griptape_nodes.retained_mode.events.os_events import ExistingFilePolicy
 
 SERVICE = "RunwayML"
 API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
@@ -461,7 +462,7 @@ class RunwayML_ActTwo(ControlNode):
                     filename = f"runwayml_act_two_{int(time.time() * 1000)}.{extension}"
 
                 logger.info(f"RunwayML Act Two: Saving video bytes to static storage as {filename}...")
-                static_url = GriptapeNodes.StaticFilesManager().save_static_file(response.content, filename)
+                static_url = GriptapeNodes.StaticFilesManager().save_static_file(response.content, filename, ExistingFilePolicy.CREATE_NEW)
                 logger.info(f"RunwayML Act Two: ✅ Video saved. URL: {static_url}")
                 return VideoUrlArtifact(url=static_url, name="runwayml_character_video")
             except Exception as e:

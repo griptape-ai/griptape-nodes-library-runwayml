@@ -9,6 +9,7 @@ from griptape_nodes.traits.options import Options
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
 from griptape_nodes.retained_mode.griptape_nodes import logger, GriptapeNodes
+from griptape_nodes.retained_mode.events.os_events import ExistingFilePolicy
 
 # Reuse the VideoUrlArtifact defined alongside ImageUrlArtifact in existing node
 # Define a lightweight VideoUrlArtifact locally to avoid package import issues
@@ -133,7 +134,7 @@ class RunwayML_VideoUpscale(ControlNode):
             else:
                 filename = f"runwayml_upscaled_video_{int(time.time() * 1000)}.{extension}"
 
-            static_url = GriptapeNodes.StaticFilesManager().save_static_file(response.content, filename)
+            static_url = GriptapeNodes.StaticFilesManager().save_static_file(response.content, filename, ExistingFilePolicy.CREATE_NEW)
             return VideoUrlArtifact(url=static_url, name="runwayml_upscaled_video")
         except Exception as e:
             logger.error(f"RunwayML VideoUpscale: Failed to download and store video: {e}")

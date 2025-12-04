@@ -12,6 +12,7 @@ from griptape_nodes.traits.options import Options
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, ParameterGroup, ParameterList
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
 from griptape_nodes.retained_mode.griptape_nodes import logger, GriptapeNodes
+from griptape_nodes.retained_mode.events.os_events import ExistingFilePolicy
 
 
 class ReferenceImageArtifact(BaseArtifact):
@@ -437,7 +438,7 @@ class RunwayML_TextToImage(ControlNode):
                 filename = f"runwayml_generated_image_{timestamp}.{extension}"
             
             # Save via StaticFilesManager
-            static_url = GriptapeNodes.StaticFilesManager().save_static_file(response.content, filename)
+            static_url = GriptapeNodes.StaticFilesManager().save_static_file(response.content, filename, ExistingFilePolicy.CREATE_NEW)
             
             return ImageUrlArtifact(value=static_url, name="runwayml_generated_image")
             
