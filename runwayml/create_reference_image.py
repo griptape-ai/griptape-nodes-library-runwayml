@@ -3,7 +3,7 @@ from griptape.artifacts import ImageUrlArtifact, BaseArtifact
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import DataNode
 from griptape_nodes.retained_mode.griptape_nodes import logger
-import requests
+from griptape_nodes.files.file import File, FileLoadError
 from PIL import Image
 import io
 
@@ -111,10 +111,9 @@ class RunwayML_CreateReferenceImage(DataNode):
             
             # Download and analyze the image
             try:
-                response = requests.get(image.value, timeout=10)
-                response.raise_for_status()
+                image_bytes = File(image.value).read_bytes()
                 
-                image_data = io.BytesIO(response.content)
+                image_data = io.BytesIO(image_bytes)
                 img = Image.open(image_data)
                 aspect_ratio = img.width / img.height
                 
@@ -125,7 +124,7 @@ class RunwayML_CreateReferenceImage(DataNode):
                     self.parameter_output_values["reference_image"] = None
                     return
                     
-            except Exception as e:
+            except (FileLoadError, Exception) as e:
                 logger.warning(f"CreateReferenceImage: Failed to download/analyze image: {e}")
                 # Continue without validation rather than failing completely
                 

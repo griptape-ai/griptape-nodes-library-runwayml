@@ -3,6 +3,8 @@ import time
 import requests
 from urllib.parse import urlparse
 
+from griptape_nodes.files.file import File, FileLoadError
+
 from griptape.artifacts import ErrorArtifact, ImageUrlArtifact
 from griptape_nodes.traits.options import Options
 
@@ -113,10 +115,9 @@ class RunwayML_VideoUpscale(ControlNode):
     def _download_and_store_video(self, video_url: str, task_id: str | None = None) -> VideoUrlArtifact:
         try:
             logger.info(f"RunwayML VideoUpscale: Downloading video from {video_url}")
-            response = requests.get(video_url, timeout=60)
-            response.raise_for_status()
+            file_content = File(video_url).read()
 
-            content_type = response.headers.get("Content-Type", "video/mp4").lower()
+            content_type = file_content.mime_type.lower() if file_content.mime_type else "video/mp4"
             # Basic mapping for common content-types
             if "quicktime" in content_type or content_type.endswith("/mov"):
                 extension = "mov"
@@ -134,9 +135,9 @@ class RunwayML_VideoUpscale(ControlNode):
             else:
                 filename = f"runwayml_upscaled_video_{int(time.time() * 1000)}.{extension}"
 
-            static_url = GriptapeNodes.StaticFilesManager().save_static_file(response.content, filename, ExistingFilePolicy.CREATE_NEW)
+            static_url = GriptapeNodes.StaticFilesManager().save_static_file(file_content.content, filename, ExistingFilePolicy.CREATE_NEW)
             return VideoUrlArtifact(url=static_url, name="runwayml_upscaled_video")
-        except Exception as e:
+        except FileLoadError as e:
             logger.error(f"RunwayML VideoUpscale: Failed to download and store video: {e}")
             # Fallback to original URL if we can't save
             return VideoUrlArtifact(url=video_url, name="runwayml_video")
