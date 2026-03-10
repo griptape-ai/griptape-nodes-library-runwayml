@@ -1,10 +1,11 @@
 import time
-import base64
 import io
 import requests
 from urllib.parse import urlparse
 from typing import Optional
 from PIL import Image
+
+from griptape_nodes.files.file import File, FileLoadError
 
 from griptape.artifacts import TextArtifact, ImageUrlArtifact, ErrorArtifact, BaseArtifact
 from griptape_nodes.traits.options import Options
@@ -291,11 +292,7 @@ class RunwayML_TextToImage(ControlNode):
             if parsed_url.scheme == "http" and (parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"):
                 logger.info(f"RunwayML T2I: Converting local HTTP URL to base64 data URI: {url_value}")
                 try:
-                    response = requests.get(url_value, timeout=10)
-                    response.raise_for_status()
-                    content_type = response.headers.get("Content-Type", "image/png")
-                    base64_data = base64.b64encode(response.content).decode("utf-8")
-                    data_uri = f"data:{content_type};base64,{base64_data}"
+                    data_uri = File(url_value).read_data_uri(fallback_mime="image/png")
                     
                     # Validate and convert the generated data URI
                     validated_uri = _validate_and_convert_data_uri(data_uri)
@@ -309,7 +306,7 @@ class RunwayML_TextToImage(ControlNode):
                         return None
                     
                     return validated_uri
-                except Exception as e:
+                except FileLoadError as e:
                     logger.error(f"RunwayML T2I: Failed to convert local URL {url_value} to base64: {e}")
                     return None
             elif parsed_url.scheme == "https":
@@ -333,11 +330,7 @@ class RunwayML_TextToImage(ControlNode):
             if parsed_url.scheme == "http" and (parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"):
                 logger.info(f"RunwayML T2I: Converting local HTTP URL string to base64 data URI: {image_input.strip()}")
                 try:
-                    response = requests.get(image_input.strip(), timeout=10)
-                    response.raise_for_status()
-                    content_type = response.headers.get("Content-Type", "image/png")
-                    base64_data = base64.b64encode(response.content).decode("utf-8")
-                    data_uri = f"data:{content_type};base64,{base64_data}"
+                    data_uri = File(image_input.strip()).read_data_uri(fallback_mime="image/png")
                     
                     # Validate and convert the generated data URI
                     validated_uri = _validate_and_convert_data_uri(data_uri)
@@ -351,7 +344,7 @@ class RunwayML_TextToImage(ControlNode):
                         return None
                     
                     return validated_uri
-                except Exception as e:
+                except FileLoadError as e:
                     logger.error(f"RunwayML T2I: Failed to convert local URL string {image_input.strip()} to base64: {e}")
                     return None
             elif parsed_url.scheme == "https":
@@ -376,11 +369,7 @@ class RunwayML_TextToImage(ControlNode):
                     if parsed_url.scheme == "http" and (parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"):
                         logger.info(f"RunwayML T2I: Converting local HTTP URL from dict to base64 data URI: {url_value}")
                         try:
-                            response = requests.get(url_value, timeout=10)
-                            response.raise_for_status()
-                            content_type = response.headers.get("Content-Type", "image/png")
-                            base64_data = base64.b64encode(response.content).decode("utf-8")
-                            data_uri = f"data:{content_type};base64,{base64_data}"
+                            data_uri = File(url_value).read_data_uri(fallback_mime="image/png")
                             
                             # Validate and convert the generated data URI
                             validated_uri = _validate_and_convert_data_uri(data_uri)
@@ -395,7 +384,7 @@ class RunwayML_TextToImage(ControlNode):
                             
                             logger.info(f"RunwayML T2I: Successfully converted dict URL to data URI ({len(validated_uri)} chars)")
                             return validated_uri
-                        except Exception as e:
+                        except FileLoadError as e:
                             logger.error(f"RunwayML T2I: Failed to convert dict URL {url_value} to base64: {e}")
                             return None
                     elif parsed_url.scheme == "https":
@@ -416,11 +405,10 @@ class RunwayML_TextToImage(ControlNode):
         """Download image from URL and store via StaticFilesManager."""
         try:
             logger.info(f"RunwayML T2I: Downloading image from {image_url}")
-            response = requests.get(image_url, timeout=30)
-            response.raise_for_status()
+            file_content = File(image_url).read()
             
-            # Determine file extension from URL or content type
-            content_type = response.headers.get("Content-Type", "image/png")
+            # Determine file extension from content type
+            content_type = file_content.mime_type if file_content.mime_type else "image/png"
             if "jpeg" in content_type or "jpg" in content_type:
                 extension = "jpg"
             elif "png" in content_type:
@@ -438,11 +426,11 @@ class RunwayML_TextToImage(ControlNode):
                 filename = f"runwayml_generated_image_{timestamp}.{extension}"
             
             # Save via StaticFilesManager
-            static_url = GriptapeNodes.StaticFilesManager().save_static_file(response.content, filename, ExistingFilePolicy.CREATE_NEW)
+            static_url = GriptapeNodes.StaticFilesManager().save_static_file(file_content.content, filename, ExistingFilePolicy.CREATE_NEW)
             
             return ImageUrlArtifact(value=static_url, name="runwayml_generated_image")
             
-        except Exception as e:
+        except FileLoadError as e:
             logger.error(f"RunwayML T2I: Failed to download and store image: {e}")
             # Fallback to original URL if download fails
             return ImageUrlArtifact(value=image_url, name="runwayml_image")

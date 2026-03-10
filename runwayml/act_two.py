@@ -1,11 +1,12 @@
 import time
-import base64
 import json
 import os
 import subprocess
 import tempfile
 import requests
 from urllib.parse import urlparse
+
+from griptape_nodes.files.file import File, FileLoadError
 
 from griptape.artifacts import TextArtifact, ImageUrlArtifact, ErrorArtifact
 from griptape_nodes.traits.options import Options
@@ -268,12 +269,8 @@ class RunwayML_ActTwo(ControlNode):
             if parsed_url.scheme in ["http", "https"]:
                 logger.info(f"RunwayML Act Two: Converting URL to base64 data URI: {url_value}")
                 try:
-                    response = requests.get(url_value, timeout=30)  # Increased timeout for larger files
-                    response.raise_for_status()
-                    content_type = response.headers.get("Content-Type", expected_media_type)
-                    base64_data = base64.b64encode(response.content).decode("utf-8")
-                    return f"data:{content_type};base64,{base64_data}"
-                except Exception as e:
+                    return File(url_value).read_data_uri(fallback_mime=expected_media_type)
+                except FileLoadError as e:
                     logger.error(f"RunwayML Act Two: Failed to convert URL {url_value} to base64: {e}")
                     return None
             else:
@@ -291,12 +288,8 @@ class RunwayML_ActTwo(ControlNode):
             if parsed_url.scheme in ["http", "https"]:
                 logger.info(f"RunwayML Act Two: Converting URL string to base64 data URI: {input_value.strip()}")
                 try:
-                    response = requests.get(input_value.strip(), timeout=30)  # Increased timeout for larger files
-                    response.raise_for_status()
-                    content_type = response.headers.get("Content-Type", expected_media_type)
-                    base64_data = base64.b64encode(response.content).decode("utf-8")
-                    return f"data:{content_type};base64,{base64_data}"
-                except Exception as e:
+                    return File(input_value.strip()).read_data_uri(fallback_mime=expected_media_type)
+                except FileLoadError as e:
                     logger.error(f"RunwayML Act Two: Failed to convert URL string {input_value.strip()} to base64: {e}")
                     return None
             else:
@@ -321,12 +314,8 @@ class RunwayML_ActTwo(ControlNode):
                 if parsed_url.scheme in ["http", "https"]:
                     logger.info(f"RunwayML Act Two: Converting dict URL to base64 data URI: {str(url_from_dict)[:50]}...")
                     try:
-                        response = requests.get(str(url_from_dict), timeout=30)
-                        response.raise_for_status()
-                        content_type = response.headers.get("Content-Type", expected_media_type)
-                        base64_data = base64.b64encode(response.content).decode("utf-8")
-                        return f"data:{content_type};base64,{base64_data}"
-                    except Exception as e:
+                        return File(str(url_from_dict)).read_data_uri(fallback_mime=expected_media_type)
+                    except FileLoadError as e:
                         logger.error(f"RunwayML Act Two: Failed to convert dict URL to base64: {e}")
                         return None
                 else:
@@ -441,10 +430,9 @@ class RunwayML_ActTwo(ControlNode):
         def _download_and_store_video(video_url: str, task_id: str | None = None) -> VideoUrlArtifact:
             try:
                 logger.info(f"RunwayML Act Two: Downloading video from {video_url}")
-                response = requests.get(video_url, timeout=60)
-                response.raise_for_status()
+                file_content = File(video_url).read()
 
-                content_type = response.headers.get("Content-Type", "video/mp4").lower()
+                content_type = file_content.mime_type.lower() if file_content.mime_type else "video/mp4"
                 if "quicktime" in content_type or content_type.endswith("/mov"):
                     extension = "mov"
                 elif "webm" in content_type:
@@ -462,10 +450,10 @@ class RunwayML_ActTwo(ControlNode):
                     filename = f"runwayml_act_two_{int(time.time() * 1000)}.{extension}"
 
                 logger.info(f"RunwayML Act Two: Saving video bytes to static storage as {filename}...")
-                static_url = GriptapeNodes.StaticFilesManager().save_static_file(response.content, filename, ExistingFilePolicy.CREATE_NEW)
+                static_url = GriptapeNodes.StaticFilesManager().save_static_file(file_content.content, filename, ExistingFilePolicy.CREATE_NEW)
                 logger.info(f"RunwayML Act Two: ✅ Video saved. URL: {static_url}")
                 return VideoUrlArtifact(url=static_url, name="runwayml_character_video")
-            except Exception as e:
+            except FileLoadError as e:
                 logger.error(f"RunwayML Act Two: Failed to download and store video: {e}")
                 return VideoUrlArtifact(url=video_url, name="runwayml_character_video")
 

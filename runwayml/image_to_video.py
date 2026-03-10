@@ -1,8 +1,9 @@
 import time
-import base64
 import requests
 from urllib.parse import urlparse
 from typing import Any
+
+from griptape_nodes.files.file import File, FileLoadError
 
 from griptape.artifacts import TextArtifact, ImageUrlArtifact, ErrorArtifact
 from griptape_nodes.traits.options import Options
@@ -155,14 +156,8 @@ class RunwayML_ImageToVideo(ControlNode):
             ):
                 logger.info(f"RunwayML I2V: Converting local HTTP URL to base64 data URI: {url_value}")
                 try:
-                    import requests
-
-                    response = requests.get(url_value, timeout=10)
-                    response.raise_for_status()
-                    content_type = response.headers.get("Content-Type", "image/png")
-                    base64_data = base64.b64encode(response.content).decode("utf-8")
-                    return f"data:{content_type};base64,{base64_data}"
-                except Exception as e:
+                    return File(url_value).read_data_uri(fallback_mime="image/png")
+                except FileLoadError as e:
                     logger.error(f"RunwayML I2V: Failed to convert local URL {url_value} to base64: {e}")
                     return None
             elif parsed_url.scheme == "https":
@@ -184,14 +179,8 @@ class RunwayML_ImageToVideo(ControlNode):
             ):
                 logger.info(f"RunwayML I2V: Converting local HTTP URL string to base64 data URI: {image_input.strip()}")
                 try:
-                    import requests
-
-                    response = requests.get(image_input.strip(), timeout=10)
-                    response.raise_for_status()
-                    content_type = response.headers.get("Content-Type", "image/png")
-                    base64_data = base64.b64encode(response.content).decode("utf-8")
-                    return f"data:{content_type};base64,{base64_data}"
-                except Exception as e:
+                    return File(image_input.strip()).read_data_uri(fallback_mime="image/png")
+                except FileLoadError as e:
                     logger.error(
                         f"RunwayML I2V: Failed to convert local URL string {image_input.strip()} to base64: {e}"
                     )
@@ -267,10 +256,9 @@ class RunwayML_ImageToVideo(ControlNode):
     def _download_and_store_video(self, video_url: str, task_id: str | None = None) -> VideoUrlArtifact:
         try:
             logger.info(f"RunwayML I2V: Downloading video from {video_url}")
-            response = requests.get(video_url, timeout=60)
-            response.raise_for_status()
+            file_content = File(video_url).read()
 
-            content_type = response.headers.get("Content-Type", "video/mp4").lower()
+            content_type = file_content.mime_type.lower() if file_content.mime_type else "video/mp4"
             if "quicktime" in content_type or content_type.endswith("/mov"):
                 extension = "mov"
             elif "webm" in content_type:
@@ -288,10 +276,10 @@ class RunwayML_ImageToVideo(ControlNode):
                 filename = f"runwayml_image_to_video_{int(time.time() * 1000)}.{extension}"
 
             logger.info(f"RunwayML I2V: Saving video bytes to static storage as {filename}...")
-            static_url = GriptapeNodes.StaticFilesManager().save_static_file(response.content, filename, ExistingFilePolicy.CREATE_NEW)
+            static_url = GriptapeNodes.StaticFilesManager().save_static_file(file_content.content, filename, ExistingFilePolicy.CREATE_NEW)
             logger.info(f"RunwayML I2V: ✅ Video saved. URL: {static_url}")
             return VideoUrlArtifact(url=static_url, name="runwayml_video")
-        except Exception as e:
+        except FileLoadError as e:
             logger.error(f"RunwayML I2V: Failed to download and store video: {e}")
             return VideoUrlArtifact(url=video_url, name="runwayml_video")
 

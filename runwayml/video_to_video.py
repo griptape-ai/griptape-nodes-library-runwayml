@@ -1,11 +1,12 @@
 import time
-import base64
 import json
 import os
 import subprocess
 import tempfile
 import requests
 from urllib.parse import urlparse
+
+from griptape_nodes.files.file import File, FileLoadError
 
 from griptape.artifacts import TextArtifact, UrlArtifact, ImageUrlArtifact, ErrorArtifact
 from griptape_nodes.traits.options import Options
@@ -215,13 +216,12 @@ class RunwayML_VideoToVideo(ControlNode):
             if parsed_url.scheme == "http" and (parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"):
                 logger.info(f"RunwayML V2V: Converting local HTTP URL to base64 data URI: {url_value}")
                 try:
-                    response = requests.get(url_value, timeout=30)  # Longer timeout for video
-                    response.raise_for_status()
-                    content_type = response.headers.get("Content-Type", "video/mp4")
+                    video_bytes = File(url_value).read_bytes()
+                    content_type = "video/mp4"
                     
                     # Write to temporary file for potential transcoding
                     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
-                        temp_file.write(response.content)
+                        temp_file.write(video_bytes)
                         temp_file_path = temp_file.name
                         
                     # Try to transcode the video if ffmpeg is available
@@ -263,13 +263,12 @@ class RunwayML_VideoToVideo(ControlNode):
             if parsed_url.scheme == "http" and (parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"):
                 logger.info(f"RunwayML V2V: Converting local HTTP URL string to base64 data URI: {video_input.strip()}")
                 try:
-                    response = requests.get(video_input.strip(), timeout=30)
-                    response.raise_for_status()
-                    content_type = response.headers.get("Content-Type", "video/mp4")
+                    video_bytes = File(video_input.strip()).read_bytes()
+                    content_type = "video/mp4"
                     
                     # Write to temporary file for potential transcoding
                     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
-                        temp_file.write(response.content)
+                        temp_file.write(video_bytes)
                         temp_file_path = temp_file.name
                         
                     # Try to transcode the video if ffmpeg is available
@@ -379,9 +378,8 @@ class RunwayML_VideoToVideo(ControlNode):
             if parsed_url.scheme in ["http", "https"]:
                 logger.info(f"RunwayML V2V: Converting URL to base64 data URI: {url_value}")
                 try:
-                    response = requests.get(url_value, timeout=30)
-                    response.raise_for_status()
-                    content_type = response.headers.get("Content-Type", "image/png")
+                    data_uri = File(url_value).read_data_uri(fallback_mime="image/png")
+                    content_type = data_uri.split(':')[1].split(';')[0]
                     
                     # Check if content type is supported
                     if content_type not in SUPPORTED_FORMATS:
@@ -389,12 +387,11 @@ class RunwayML_VideoToVideo(ControlNode):
                         logger.error(f"RunwayML V2V: {error_msg}")
                         raise ValueError(error_msg)
                     
-                    base64_data = base64.b64encode(response.content).decode("utf-8")
-                    return f"data:{content_type};base64,{base64_data}"
+                    return data_uri
                 except ValueError as ve:
                     # Re-raise validation errors
                     raise ve
-                except Exception as e:
+                except FileLoadError as e:
                     logger.error(f"RunwayML V2V: Failed to convert URL {url_value} to base64: {e}")
                     return None
             else:
@@ -416,9 +413,8 @@ class RunwayML_VideoToVideo(ControlNode):
             if parsed_url.scheme in ["http", "https"]:
                 logger.info(f"RunwayML V2V: Converting URL string to base64 data URI: {image_input.strip()}")
                 try:
-                    response = requests.get(image_input.strip(), timeout=30)
-                    response.raise_for_status()
-                    content_type = response.headers.get("Content-Type", "image/png")
+                    data_uri = File(image_input.strip()).read_data_uri(fallback_mime="image/png")
+                    content_type = data_uri.split(':')[1].split(';')[0]
                     
                     # Check if content type is supported
                     if content_type not in SUPPORTED_FORMATS:
@@ -426,12 +422,11 @@ class RunwayML_VideoToVideo(ControlNode):
                         logger.error(f"RunwayML V2V: {error_msg}")
                         raise ValueError(error_msg)
                         
-                    base64_data = base64.b64encode(response.content).decode("utf-8")
-                    return f"data:{content_type};base64,{base64_data}"
+                    return data_uri
                 except ValueError as ve:
                     # Re-raise validation errors
                     raise ve
-                except Exception as e:
+                except FileLoadError as e:
                     logger.error(f"RunwayML V2V: Failed to convert URL string {image_input.strip()} to base64: {e}")
                     return None
             else:
@@ -467,9 +462,8 @@ class RunwayML_VideoToVideo(ControlNode):
                 if parsed_url.scheme in ["http", "https"]:
                     logger.info(f"RunwayML V2V: Converting dict URL to base64 data URI: {str(url_from_dict)[:50]}...")
                     try:
-                        response = requests.get(str(url_from_dict), timeout=30)
-                        response.raise_for_status()
-                        content_type = response.headers.get("Content-Type", "image/png")
+                        data_uri = File(str(url_from_dict)).read_data_uri(fallback_mime="image/png")
+                        content_type = data_uri.split(':')[1].split(';')[0]
                         
                         # Check if content type is supported
                         if content_type not in SUPPORTED_FORMATS:
@@ -477,12 +471,11 @@ class RunwayML_VideoToVideo(ControlNode):
                             logger.error(f"RunwayML V2V: {error_msg}")
                             raise ValueError(error_msg)
                             
-                        base64_data = base64.b64encode(response.content).decode("utf-8")
-                        return f"data:{content_type};base64,{base64_data}"
+                        return data_uri
                     except ValueError as ve:
                         # Re-raise validation errors
                         raise ve
-                    except Exception as e:
+                    except FileLoadError as e:
                         logger.error(f"RunwayML V2V: Failed to convert dict URL to base64: {e}")
                         return None
                 else:
@@ -573,10 +566,9 @@ class RunwayML_VideoToVideo(ControlNode):
         def _download_and_store_video(video_url: str, task_id: str | None = None) -> VideoUrlArtifact:
             try:
                 logger.info(f"RunwayML V2V: Downloading video from {video_url}")
-                response = requests.get(video_url, timeout=60)
-                response.raise_for_status()
+                file_content = File(video_url).read()
 
-                content_type = response.headers.get("Content-Type", "video/mp4").lower()
+                content_type = file_content.mime_type.lower() if file_content.mime_type else "video/mp4"
                 if "quicktime" in content_type or content_type.endswith("/mov"):
                     extension = "mov"
                 elif "webm" in content_type:
@@ -594,10 +586,10 @@ class RunwayML_VideoToVideo(ControlNode):
                     filename = f"runwayml_video_to_video_{int(time.time() * 1000)}.{extension}"
 
                 logger.info(f"RunwayML V2V: Saving video bytes to static storage as {filename}...")
-                static_url = GriptapeNodes.StaticFilesManager().save_static_file(response.content, filename, ExistingFilePolicy.CREATE_NEW)
+                static_url = GriptapeNodes.StaticFilesManager().save_static_file(file_content.content, filename, ExistingFilePolicy.CREATE_NEW)
                 logger.info(f"RunwayML V2V: ✅ Video saved. URL: {static_url}")
                 return VideoUrlArtifact(url=static_url, name="runwayml_video_to_video")
-            except Exception as e:
+            except FileLoadError as e:
                 logger.error(f"RunwayML V2V: Failed to download and store video: {e}")
                 return VideoUrlArtifact(url=video_url, name="runwayml_video_to_video")
             
