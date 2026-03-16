@@ -1,17 +1,15 @@
 import time
-import requests
-from urllib.parse import urlparse
 from typing import Any
+from urllib.parse import urlparse
 
+import requests
+from griptape.artifacts import ErrorArtifact, ImageUrlArtifact
+from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
+from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
 from griptape_nodes.files.file import File, FileLoadError
-
-from griptape.artifacts import TextArtifact, ImageUrlArtifact, ErrorArtifact
-from griptape_nodes.traits.options import Options
-
-from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, ParameterGroup
-from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode, BaseNode
-from griptape_nodes.retained_mode.griptape_nodes import logger, GriptapeNodes
 from griptape_nodes.retained_mode.events.os_events import ExistingFilePolicy
+from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
+from griptape_nodes.traits.options import Options
 
 SERVICE = "RunwayML"
 API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
@@ -276,7 +274,9 @@ class RunwayML_ImageToVideo(ControlNode):
                 filename = f"runwayml_image_to_video_{int(time.time() * 1000)}.{extension}"
 
             logger.info(f"RunwayML I2V: Saving video bytes to static storage as {filename}...")
-            static_url = GriptapeNodes.StaticFilesManager().save_static_file(file_content.content, filename, ExistingFilePolicy.CREATE_NEW)
+            static_url = GriptapeNodes.StaticFilesManager().save_static_file(
+                file_content.content, filename, ExistingFilePolicy.CREATE_NEW
+            )
             logger.info(f"RunwayML I2V: ✅ Video saved. URL: {static_url}")
             return VideoUrlArtifact(url=static_url, name="runwayml_video")
         except FileLoadError as e:
