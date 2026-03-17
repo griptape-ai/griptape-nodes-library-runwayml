@@ -5,8 +5,8 @@ import requests
 from griptape.artifacts import ErrorArtifact, ImageUrlArtifact
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
+from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.files.file import File, FileLoadError
-from griptape_nodes.retained_mode.events.os_events import ExistingFilePolicy
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
 from griptape_nodes.traits.options import Options
 from media import prepare_media_data_uri
@@ -95,6 +95,9 @@ class RunwayML_VideoUpscale(ControlNode):
             )
         )
 
+        self._output_file = ProjectFileParameter(node=self, name="output_file", default_filename="output.mp4")
+        self._output_file.add_parameter()
+
     # --- Helpers ---
     def _get_video_uri(self) -> str | None:
         """Resolve the ``video`` input to a value the /v1/video_upscale endpoint accepts.
@@ -114,28 +117,9 @@ class RunwayML_VideoUpscale(ControlNode):
             logger.info(f"RunwayML VideoUpscale: Downloading video from {video_url}")
             file_content = File(video_url).read()
 
-            content_type = file_content.mime_type.lower() if file_content.mime_type else "video/mp4"
-            # Basic mapping for common content-types
-            if "quicktime" in content_type or content_type.endswith("/mov"):
-                extension = "mov"
-            elif "webm" in content_type:
-                extension = "webm"
-            elif "ogg" in content_type:
-                extension = "ogv"
-            elif "h264" in content_type or "mp4" in content_type or "mpeg4" in content_type:
-                extension = "mp4"
-            else:
-                extension = "mp4"
-
-            if task_id:
-                filename = f"runwayml_upscaled_video_{task_id}.{extension}"
-            else:
-                filename = f"runwayml_upscaled_video_{int(time.time() * 1000)}.{extension}"
-
-            static_url = GriptapeNodes.StaticFilesManager().save_static_file(
-                file_content.content, filename, ExistingFilePolicy.CREATE_NEW
-            )
-            return VideoUrlArtifact(url=static_url, name="runwayml_upscaled_video")
+            dest = self._output_file.build_file()
+            dest.write_bytes(file_content.content)
+            return VideoUrlArtifact(url=dest.location, name="runwayml_upscaled_video")
         except FileLoadError as e:
             logger.error(f"RunwayML VideoUpscale: Failed to download and store video: {e}")
             # Fallback to original URL if we can't save
