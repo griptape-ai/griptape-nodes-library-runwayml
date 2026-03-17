@@ -1,0 +1,108 @@
+{
+    "name": "RunwayML Library",
+    "library_schema_version": "0.1.0",
+    "settings": [
+        {
+            "description": "API keys required by nodes in this library",
+            "category": "app_events.on_app_initialization_complete",
+            "contents": {
+                "secrets_to_register": [
+                    "RUNWAYML_API_SECRET"
+                ]
+            }
+        }
+    ],
+    "metadata": {
+        "author": "Griptape",
+        "description": "Griptape Nodes for interacting with the RunwayML API.",
+        "library_version": "0.1.2",
+        "engine_version": "0.75.0",
+        "tags": [
+            "Griptape",
+            "AI",
+            "RunwayML",
+            "Video Generation",
+            "Image Generation"
+        ],
+        "dependencies": {
+            "pip_dependencies": [
+                "requests",
+                "Pillow"
+            ]
+        }
+    },
+    "categories": [
+        {
+            "video/runwayml": {
+                "color": "border-pink-500",
+                "title": "Video/RunwayML",
+                "description": "Nodes for using the RunwayML API.",
+                "icon": "Video"
+            }
+        },
+        {
+            "image/runwayml": {
+                "color": "border-purple-500",
+                "title": "Image/RunwayML",
+                "description": "Nodes for using the RunwayML API.",
+                "icon": "Image"
+            }
+        }
+    ],
+    "nodes": [
+        {
+            "class_name": "RunwayML_ActTwo",
+            "file_path": "act_two.py",
+            "metadata": {
+                "category": "video/runwayml",
+                "description": "Generates a character performance video using the RunwayML Act Two API.",
+                "display_name": "Runway Act Two"
+            }
+        },
+        {
+            "class_name": "RunwayML_ImageToVideo",
+            "file_path": "image_to_video.py",
+            "metadata": {
+                "category": "video/runwayml",
+                "description": "Generates a video from an image and a text prompt using the RunwayML image-to-video API.",
+                "display_name": "Runway Image-to-Video"
+            }
+        },
+        {
+            "class_name": "RunwayML_VideoToVideo",
+            "file_path": "video_to_video.py",
+            "metadata": {
+                "category": "video/runwayml",
+                "description": "Generates a video from an input video and a text prompt using the RunwayML video-to-video API.",
+                "display_name": "Runway Video-to-Video"
+            }
+        },
+        {
+            "class_name": "RunwayML_CreateReferenceImage",
+            "file_path": "create_reference_image.py",
+            "metadata": {
+                "category": "image/runwayml",
+                "description": "Creates a reference image artifact with a tag for use in RunwayML text-to-image generation.",
+                "display_name": "Runway Create Reference Image"
+            }
+        },
+        {
+            "class_name": "RunwayML_TextToImage",
+            "file_path": "text_to_image.py",
+            "metadata": {
+                "category": "image/runwayml",
+                "description": "Generates images from text prompts with optional reference images using the RunwayML text-to-image API.",
+                "display_name": "Runway Text-to-Image"
+            }
+        },
+        {
+            "class_name": "RunwayML_VideoUpscale",
+            "file_path": "video_upscale.py",
+            "metadata": {
+                "category": "video/runwayml",
+                "description": "Upscales a video using the RunwayML video_upscale API.",
+                "display_name": "Runway Video Upscale"
+            }
+        }
+    ]
+}
