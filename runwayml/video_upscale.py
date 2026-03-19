@@ -1,17 +1,16 @@
 import os
 import time
-import requests
 from urllib.parse import urlparse
 
-from griptape_nodes.files.file import File, FileLoadError
-
+import requests
 from griptape.artifacts import ErrorArtifact, ImageUrlArtifact
-from griptape_nodes.traits.options import Options
-
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
-from griptape_nodes.retained_mode.griptape_nodes import logger, GriptapeNodes
+from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.retained_mode.events.os_events import ExistingFilePolicy
+from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
+from griptape_nodes.traits.options import Options
+
 
 # Reuse the VideoUrlArtifact defined alongside ImageUrlArtifact in existing node
 # Define a lightweight VideoUrlArtifact locally to avoid package import issues
@@ -135,7 +134,9 @@ class RunwayML_VideoUpscale(ControlNode):
             else:
                 filename = f"runwayml_upscaled_video_{int(time.time() * 1000)}.{extension}"
 
-            static_url = GriptapeNodes.StaticFilesManager().save_static_file(file_content.content, filename, ExistingFilePolicy.CREATE_NEW)
+            static_url = GriptapeNodes.StaticFilesManager().save_static_file(
+                file_content.content, filename, ExistingFilePolicy.CREATE_NEW
+            )
             return VideoUrlArtifact(url=static_url, name="runwayml_upscaled_video")
         except FileLoadError as e:
             logger.error(f"RunwayML VideoUpscale: Failed to download and store video: {e}")
@@ -145,9 +146,7 @@ class RunwayML_VideoUpscale(ControlNode):
     def _log_storage_env_hints(self) -> None:
         try:
             sm = GriptapeNodes.StaticFilesManager()
-            logger.info(
-                "RunwayML VideoUpscale: StaticFilesManager instance: %s", sm.__class__.__name__
-            )
+            logger.info("RunwayML VideoUpscale: StaticFilesManager instance: %s", sm.__class__.__name__)
             # Attempt to log likely backend attribute names if present (without secrets)
             backend_attr_names = [
                 n for n in dir(sm) if any(k in n.lower() for k in ["backend", "storage", "bucket", "client"])
@@ -237,9 +236,7 @@ class RunwayML_VideoUpscale(ControlNode):
                 api_key = GriptapeNodes.SecretsManager().get_secret(API_KEY_ENV_VAR)
 
                 payload = {"model": model_name, "videoUri": video_uri}
-                logger.info(
-                    f"RunwayML VideoUpscale: Creating task with payload keys: {list(payload.keys())}"
-                )
+                logger.info(f"RunwayML VideoUpscale: Creating task with payload keys: {list(payload.keys())}")
 
                 headers = {
                     "Authorization": f"Bearer {api_key}",
@@ -255,12 +252,8 @@ class RunwayML_VideoUpscale(ControlNode):
                 )
                 if response.status_code != 200:
                     error_body = response.text
-                    logger.error(
-                        f"RunwayML VideoUpscale: API returned {response.status_code}: {error_body}"
-                    )
-                    raise ValueError(
-                        f"RunwayML API Error ({response.status_code}): {error_body}"
-                    )
+                    logger.error(f"RunwayML VideoUpscale: API returned {response.status_code}: {error_body}")
+                    raise ValueError(f"RunwayML API Error ({response.status_code}): {error_body}")
                 task_resp = response.json()
                 task_id = task_resp.get("id")
                 if task_id:
@@ -336,5 +329,3 @@ class RunwayML_VideoUpscale(ControlNode):
                 return ErrorArtifact(error_message)
 
         yield upscale_async
-
-
