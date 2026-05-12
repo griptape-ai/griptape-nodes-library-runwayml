@@ -251,11 +251,7 @@ class RunwayML_VideoToVideo(ControlNode):
         raises ValueError so the caller surfaces a clear error before the API call.
         """
         candidate = candidate.strip()
-        if (
-            candidate.startswith("data:video")
-            or candidate.startswith("https://")
-            or candidate.startswith("runway://")
-        ):
+        if candidate.startswith("data:video") or candidate.startswith("https://") or candidate.startswith("runway://"):
             return candidate
 
         parsed = urlparse(candidate)
