@@ -210,6 +210,60 @@ class RunwayML_VideoToVideo(ControlNode):
             logger.warning(f"RunwayML V2V: Error during video transcoding: {str(e)}")
             return None
 
+    def _http_url_to_data_uri(self, url: str) -> str | None:
+        """
+        Downloads a video from an HTTP(S) URL, optionally transcodes it via ffmpeg,
+        and returns a `data:video/mp4;base64,...` URI. Returns None on failure.
+        """
+        try:
+            video_bytes = File(url).read_bytes()
+            content_type = "video/mp4"
+
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
+                temp_file.write(video_bytes)
+                temp_file_path = temp_file.name
+
+            transcoded_path = self._transcode_video_file(temp_file_path)
+            file_to_encode = transcoded_path if transcoded_path else temp_file_path
+
+            with open(file_to_encode, "rb") as f:
+                base64_data = base64.b64encode(f.read()).decode("utf-8")
+
+            try:
+                os.unlink(temp_file_path)
+                if transcoded_path:
+                    os.unlink(transcoded_path)
+            except Exception:
+                pass
+
+            return f"data:{content_type};base64,{base64_data}"
+        except Exception as e:
+            logger.error(f"RunwayML V2V: Failed to convert URL {url} to base64 data URI: {e}")
+            return None
+
+    def _coerce_video_uri(self, candidate: str) -> str | None:
+        """
+        Coerces a string into a `videoUri` value RunwayML will accept.
+
+        RunwayML's `/v1/video_to_video` endpoint only accepts `https://`, `runway://`,
+        or `data:video/...` URIs. This method passes those through unchanged and
+        downloads `http://` URLs to a `data:video/...` data URI. Anything else
+        raises ValueError so the caller surfaces a clear error before the API call.
+        """
+        candidate = candidate.strip()
+        if candidate.startswith("data:video") or candidate.startswith("https://") or candidate.startswith("runway://"):
+            return candidate
+
+        parsed = urlparse(candidate)
+        if parsed.scheme == "http":
+            logger.info(f"RunwayML V2V: Converting HTTP URL to base64 data URI: {candidate}")
+            return self._http_url_to_data_uri(candidate)
+
+        raise ValueError(
+            "RunwayML V2V: video URI must be an https:// URL, a runway:// URI, or a data:video/... data URI; "
+            f"got: {candidate!r}"
+        )
+
     def _get_video_data_uri(self, param_name: str) -> str | None:
         """
         Gets a video URL or converts to data URI if needed.
@@ -222,108 +276,11 @@ class RunwayML_VideoToVideo(ControlNode):
 
         # Handle URL artifacts
         if isinstance(video_input, (VideoUrlArtifact, ImageUrlArtifact, UrlArtifact)):
-            url_value = video_input.value
-            if url_value.startswith("data:video"):
-                return url_value
-
-            parsed_url = urlparse(url_value)
-            if parsed_url.scheme == "http" and (
-                parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"
-            ):
-                logger.info(f"RunwayML V2V: Converting local HTTP URL to base64 data URI: {url_value}")
-                try:
-                    video_bytes = File(url_value).read_bytes()
-                    content_type = "video/mp4"
-
-                    # Write to temporary file for potential transcoding
-                    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
-                        temp_file.write(video_bytes)
-                        temp_file_path = temp_file.name
-
-                    # Try to transcode the video if ffmpeg is available
-                    transcoded_path = self._transcode_video_file(temp_file_path)
-
-                    # Use transcoded file if available, otherwise use original
-                    file_to_encode = transcoded_path if transcoded_path else temp_file_path
-
-                    # Convert to base64
-                    with open(file_to_encode, "rb") as f:
-                        file_content = f.read()
-                        base64_data = base64.b64encode(file_content).decode("utf-8")
-
-                    # Clean up
-                    try:
-                        os.unlink(temp_file_path)
-                        if transcoded_path:
-                            os.unlink(transcoded_path)
-                    except Exception:
-                        pass
-
-                    return f"data:{content_type};base64,{base64_data}"
-                except Exception as e:
-                    logger.error(f"RunwayML V2V: Failed to convert local URL {url_value} to base64: {e}")
-                    return None
-            elif parsed_url.scheme == "https":
-                logger.info(f"RunwayML V2V: Using public HTTPS URL for video: {url_value}")
-                return url_value
-            else:
-                logger.warning(
-                    f"RunwayML V2V: URL artifact with non-HTTPS/non-local-HTTP URL provided: {url_value}. Attempting to send as is."
-                )
-                return url_value
+            return self._coerce_video_uri(video_input.value)
 
         # Handle string input (URL or data URI)
         elif isinstance(video_input, str):
-            if video_input.strip().startswith("data:video"):
-                return video_input.strip()
-
-            parsed_url = urlparse(video_input.strip())
-            if parsed_url.scheme == "http" and (
-                parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"
-            ):
-                logger.info(f"RunwayML V2V: Converting local HTTP URL string to base64 data URI: {video_input.strip()}")
-                try:
-                    video_bytes = File(video_input.strip()).read_bytes()
-                    content_type = "video/mp4"
-
-                    # Write to temporary file for potential transcoding
-                    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
-                        temp_file.write(video_bytes)
-                        temp_file_path = temp_file.name
-
-                    # Try to transcode the video if ffmpeg is available
-                    transcoded_path = self._transcode_video_file(temp_file_path)
-
-                    # Use transcoded file if available, otherwise use original
-                    file_to_encode = transcoded_path if transcoded_path else temp_file_path
-
-                    # Convert to base64
-                    with open(file_to_encode, "rb") as f:
-                        file_content = f.read()
-                        base64_data = base64.b64encode(file_content).decode("utf-8")
-
-                    # Clean up
-                    try:
-                        os.unlink(temp_file_path)
-                        if transcoded_path:
-                            os.unlink(transcoded_path)
-                    except Exception:
-                        pass
-
-                    return f"data:{content_type};base64,{base64_data}"
-                except Exception as e:
-                    logger.error(
-                        f"RunwayML V2V: Failed to convert local URL string {video_input.strip()} to base64: {e}"
-                    )
-                    return None
-            elif parsed_url.scheme == "https":
-                logger.info(f"RunwayML V2V: Using public HTTPS URL string for video: {video_input.strip()}")
-                return video_input.strip()
-            else:
-                logger.warning(
-                    f"RunwayML V2V: String input is not a data URI, HTTPS URL, or local HTTP URL: {video_input.strip()}. Attempting to send as is."
-                )
-                return video_input.strip()
+            return self._coerce_video_uri(video_input)
 
         # Handle dictionary input
         elif isinstance(video_input, dict):
@@ -334,9 +291,7 @@ class RunwayML_VideoToVideo(ControlNode):
             media_type_from_dict = video_input.get("media_type", "video/mp4")
 
             if input_type in ["VideoUrlArtifact", "ImageUrlArtifact", "UrlArtifact"] and url_from_dict:
-                if str(url_from_dict).startswith("data:video"):
-                    return str(url_from_dict)
-                return str(url_from_dict)
+                return self._coerce_video_uri(str(url_from_dict))
             elif base64_from_dict:
                 if not str(base64_from_dict).startswith(f"data:{media_type_from_dict};base64,"):
                     return f"data:{media_type_from_dict};base64,{base64_from_dict}"
@@ -535,9 +490,13 @@ class RunwayML_VideoToVideo(ControlNode):
             )
 
         # Check required video input
-        video_data = self._get_video_data_uri("video")
-        if not video_data:
-            errors.append(ValueError("Video input ('video') is required and must be a valid URL or data URI."))
+        try:
+            video_data = self._get_video_data_uri("video")
+        except ValueError as e:
+            errors.append(e)
+        else:
+            if not video_data:
+                errors.append(ValueError("Video input ('video') is required and must be a valid URL or data URI."))
 
         # Check prompt
         prompt_val = self.get_parameter_value("prompt")
