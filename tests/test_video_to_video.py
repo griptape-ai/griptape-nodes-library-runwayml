@@ -34,12 +34,9 @@ class TestCoerceVideoUri:
     @pytest.mark.parametrize(
         "uri",
         [
-            "file:///tmp/v.mp4",
             "ftp://example.com/v.mp4",
-            "/absolute/path/v.mp4",
-            "relative/path/v.mp4",
-            "v.mp4",
             "s3://bucket/v.mp4",
+            "gs://bucket/v.mp4",
         ],
     )
     def test_rejects_unsupported_schemes(self, node, uri):
@@ -47,8 +44,48 @@ class TestCoerceVideoUri:
             node._coerce_video_uri(uri)
 
     def test_error_message_includes_offending_value(self, node):
-        with pytest.raises(ValueError, match="file:///bad.mp4"):
-            node._coerce_video_uri("file:///bad.mp4")
+        with pytest.raises(ValueError, match="s3://bad/v.mp4"):
+            node._coerce_video_uri("s3://bad/v.mp4")
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/absolute/path/v.mp4",
+            "relative/path/v.mp4",
+            "v.mp4",
+            "/Volumes/griptape/oncall/BUG/inputs/LTX Video Retake_ltx_video_retake_1.mp4",
+            # Macro-template paths (resolved against the project by `File`):
+            "{inputs}/FHE_Arri-test2_for_face_replace-Brayden_Rec709-720P-reference.mp4",
+            "{outputs}/sub/v.mp4",
+        ],
+    )
+    def test_local_file_paths_are_read_into_data_uri(self, node, path):
+        """Regression for #28 over-rejecting: local paths must be read via `File`, not rejected."""
+        payload = b"local-bytes"
+        with (
+            patch("runwayml.video_to_video.File") as MockFile,
+            patch.object(RunwayML_VideoToVideo, "_transcode_video_file", return_value=None),
+        ):
+            MockFile.return_value.read_bytes.return_value = payload
+            result = node._coerce_video_uri(path)
+            MockFile.assert_called_with(path)
+
+        expected = "data:video/mp4;base64," + base64.b64encode(payload).decode()
+        assert result == expected
+
+    def test_file_uri_is_read_locally(self, node):
+        payload = b"file-uri-bytes"
+        with (
+            patch("runwayml.video_to_video.File") as MockFile,
+            patch.object(RunwayML_VideoToVideo, "_transcode_video_file", return_value=None),
+        ):
+            MockFile.return_value.read_bytes.return_value = payload
+            result = node._coerce_video_uri("file:///tmp/v.mp4")
+            # `file://` prefix must be stripped so `File` gets a plain path.
+            MockFile.assert_called_with("/tmp/v.mp4")
+
+        expected = "data:video/mp4;base64," + base64.b64encode(payload).decode()
+        assert result == expected
 
     def test_http_url_is_downloaded_and_returned_as_data_uri(self, node):
         payload = b"\x00\x01\x02fake-video-bytes"
@@ -82,10 +119,18 @@ class TestCoerceVideoUri:
         assert result is not None
         assert result.startswith("data:video/mp4;base64,")
 
-    def test_http_download_failure_returns_none(self, node):
+    def test_http_download_failure_raises_with_source(self, node):
+        """`File` failures are wrapped as a ValueError so `validate_node` surfaces them."""
         with patch("runwayml.video_to_video.File") as MockFile:
             MockFile.return_value.read_bytes.side_effect = RuntimeError("network down")
-            assert node._coerce_video_uri("http://example.com/v.mp4") is None
+            with pytest.raises(ValueError, match="http://example.com/v.mp4"):
+                node._coerce_video_uri("http://example.com/v.mp4")
+
+    def test_local_path_read_failure_raises_with_source(self, node):
+        with patch("runwayml.video_to_video.File") as MockFile:
+            MockFile.return_value.read_bytes.side_effect = RuntimeError("no such file")
+            with pytest.raises(ValueError, match="/missing/v.mp4"):
+                node._coerce_video_uri("/missing/v.mp4")
 
 
 class TestGetVideoDataUriDispatch:
@@ -113,7 +158,7 @@ class TestGetVideoDataUriDispatch:
         assert node._get_video_data_uri("video") == "https://example.com/v.mp4"
 
     def test_string_input_with_unsupported_scheme_raises(self, node):
-        node.set_parameter_value("video", "file:///bad.mp4")
+        node.set_parameter_value("video", "s3://bad/v.mp4")
         with pytest.raises(ValueError):
             node._get_video_data_uri("video")
 
@@ -128,7 +173,7 @@ class TestGetVideoDataUriDispatch:
         """Regression: previously the dict path bypassed validation and returned the bad URI as-is."""
         node.set_parameter_value(
             "video",
-            {"type": "VideoUrlArtifact", "value": "file:///bad.mp4"},
+            {"type": "VideoUrlArtifact", "value": "s3://bad/v.mp4"},
         )
         with pytest.raises(ValueError, match="must be an https://"):
             node._get_video_data_uri("video")
@@ -158,7 +203,7 @@ class TestValidateNodeSurfacingValueError:
             yield gn
 
     def test_unsupported_video_scheme_appears_as_validation_error(self, node):
-        node.set_parameter_value("video", "file:///bad.mp4")
+        node.set_parameter_value("video", "s3://bad/v.mp4")
         node.set_parameter_value("prompt", "hello")
         node.set_parameter_value("model", "gen4_aleph")
 
@@ -188,6 +233,19 @@ class TestValidateNodeSurfacingValueError:
 
     def test_http_url_is_downloaded_during_validation(self, node):
         node.set_parameter_value("video", "http://example.com/v.mp4")
+        node.set_parameter_value("prompt", "hello")
+        node.set_parameter_value("model", "gen4_aleph")
+
+        with (
+            patch("runwayml.video_to_video.File") as MockFile,
+            patch.object(RunwayML_VideoToVideo, "_transcode_video_file", return_value=None),
+        ):
+            MockFile.return_value.read_bytes.return_value = b"video-bytes"
+            assert node.validate_node() is None
+
+    def test_local_file_path_is_read_during_validation(self, node):
+        """Regression for #28 over-rejecting: a local path must validate, not surface as an error."""
+        node.set_parameter_value("video", "/Volumes/griptape/inputs/v.mp4")
         node.set_parameter_value("prompt", "hello")
         node.set_parameter_value("model", "gen4_aleph")
 
