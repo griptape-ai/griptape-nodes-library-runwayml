@@ -4,11 +4,15 @@ import requests
 from griptape.artifacts import ErrorArtifact, ImageUrlArtifact
 from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
+from griptape_nodes.exe_types.param_components.artifact_url.public_artifact_url_parameter import (
+    PublicArtifactUrlParameter,
+)
+from griptape_nodes.exe_types.param_types.parameter_image import ParameterImage
+from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
 from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.retained_mode.events.os_events import ExistingFilePolicy
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
 from griptape_nodes.traits.options import Options
-from media import prepare_media_data_uri
 
 SERVICE = "RunwayML"
 API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
@@ -62,45 +66,41 @@ class RunwayML_ActTwo(ControlNode):
         self.add_node_element(character_type_group)
 
         # Media Inputs
-
-        self.add_parameter(
-            Parameter(
+        # Each input wraps with PublicArtifactUrlParameter so RunwayML receives a public
+        # HTTPS URL it can fetch directly. This avoids the ~5MB data-URI body cap and lets
+        # the API stream large uploads from Griptape Cloud storage.
+        self._public_character_video = PublicArtifactUrlParameter(
+            node=self,
+            artifact_url_parameter=ParameterVideo(
                 name="character_video",
-                input_types=["VideoUrlArtifact", "VideoArtifact"],
-                type="VideoUrlArtifact",
-                tooltip="The video to process",
-                ui_options={
-                    "clickable_file_browser": True,
-                    "expander": True,
-                    "display_name": "Video or Path to Video",
-                },
-            )
+                tooltip="The character video to drive (used when character type is 'video').",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            ),
+            disclaimer_message="RunwayML uses this URL to fetch the character video for generation.",
         )
+        self._public_character_video.add_input_parameters()
 
-        self.add_parameter(
-            Parameter(
+        self._public_reference_video = PublicArtifactUrlParameter(
+            node=self,
+            artifact_url_parameter=ParameterVideo(
                 name="reference_video",
-                input_types=["VideoUrlArtifact", "VideoArtifact"],
-                type="VideoUrlArtifact",
-                tooltip="The video to process",
-                ui_options={
-                    "clickable_file_browser": True,
-                    "expander": True,
-                    "display_name": "Video or Path to Video",
-                },
-            )
+                tooltip="The reference performance video.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            ),
+            disclaimer_message="RunwayML uses this URL to fetch the reference performance video.",
         )
+        self._public_reference_video.add_input_parameters()
 
-        self.add_parameter(
-            Parameter(
+        self._public_character_image = PublicArtifactUrlParameter(
+            node=self,
+            artifact_url_parameter=ParameterImage(
                 name="character_image",
-                input_types=["ImageArtifact", "ImageUrlArtifact", "str"],
-                type="ImageUrlArtifact",
-                tooltip="Input image of the character. Accepts ImageUrlArtifact, a public URL string, or a base64 data URI string.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.OUTPUT},
-                ui_options={"clickable_file_browser": True},
-            )
+                tooltip="Input image of the character (used when character type is 'image').",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            ),
+            disclaimer_message="RunwayML uses this URL to fetch the character image.",
         )
+        self._public_character_image.add_input_parameters()
 
         # Settings Group
         with ParameterGroup(name="Settings") as settings_group:
@@ -222,17 +222,29 @@ class RunwayML_ActTwo(ControlNode):
         return super().after_value_set(parameter, value)
 
     def _get_data_uri(self, param_name: str) -> str | None:
-        """Resolve an input parameter to a value the character_performance endpoint accepts.
+        """Resolve a media input parameter to a public URL via Griptape Cloud upload.
 
-        Returns an ``https://``, ``runway://``, or ``data:<kind>/...`` URI, or ``None``
-        when the parameter is unset or could not be loaded.
+        Triggers an upload to Griptape Cloud for non-public inputs (local paths, macro
+        paths, ``data:`` URIs); the upload is reused on subsequent calls within the same
+        node run because the wrapper caches its ``gtc_file_path``.
+
+        Returns ``None`` when the parameter is unset.
         """
-        kind = "image" if param_name == "character_image" else "video"
-        return prepare_media_data_uri(
-            self.get_parameter_value(param_name),
-            kind=kind,
-            node_name="RunwayML Act Two",
-        )
+        wrappers = {
+            "character_image": self._public_character_image,
+            "character_video": self._public_character_video,
+            "reference_video": self._public_reference_video,
+        }
+        wrapper = wrappers.get(param_name)
+        if wrapper is None:
+            return None
+        if not self.get_parameter_value(param_name):
+            return None
+        return wrapper.get_public_url_for_parameter()
+
+    def _has_input(self, param_name: str) -> bool:
+        """Whether ``param_name`` has been set to a truthy value (no upload triggered)."""
+        return bool(self.get_parameter_value(param_name))
 
     def validate_node(self) -> list[Exception] | None:
         errors = []
@@ -249,16 +261,16 @@ class RunwayML_ActTwo(ControlNode):
         character_type = self.get_parameter_value("character_type") or DEFAULT_CHARACTER_TYPE
 
         if character_type == "image":
-            if not self._get_data_uri("character_image"):
+            if not self._has_input("character_image"):
                 errors.append(ValueError("Character image is required when character type is 'image'."))
         elif character_type == "video":
-            if not self._get_data_uri("character_video"):
+            if not self._has_input("character_video"):
                 errors.append(ValueError("Character video is required when character type is 'video'."))
         else:
             errors.append(ValueError(f"Invalid character type: {character_type}. Must be 'image' or 'video'."))
 
         # Validate reference video
-        if not self._get_data_uri("reference_video"):
+        if not self._has_input("reference_video"):
             errors.append(ValueError("Reference video ('reference_video') is required."))
 
         # Validate aspect ratio
@@ -290,16 +302,6 @@ class RunwayML_ActTwo(ControlNode):
 
         # Get parameter values
         character_type = self.get_parameter_value("character_type") or DEFAULT_CHARACTER_TYPE
-
-        # Get the appropriate character input based on type
-        if character_type == "image":
-            character_image_uri = self._get_data_uri("character_image")
-            character_video_uri = None
-        else:
-            character_video_uri = self._get_data_uri("character_video")
-            character_image_uri = None
-
-        reference_video_uri = self._get_data_uri("reference_video")
         ratio_val = str(self.get_parameter_value("ratio") or DEFAULT_ASPECT_RATIO)
 
         # Handle seed control (ComfyUI-style)
@@ -368,9 +370,17 @@ class RunwayML_ActTwo(ControlNode):
             try:
                 api_key = GriptapeNodes.SecretsManager().get_secret(API_KEY_ENV_VAR)
 
+                # Resolve media inputs to public URLs RunwayML can fetch directly. Each
+                # call uploads to Griptape Cloud if the input isn't already a public URL.
+                if character_type == "image":
+                    character_uri = self._public_character_image.get_public_url_for_parameter()
+                else:
+                    character_uri = self._public_character_video.get_public_url_for_parameter()
+                reference_video_uri = self._public_reference_video.get_public_url_for_parameter()
+
                 # Build the payload according to the API format
                 task_payload = {
-                    "character": {"type": character_type, "uri": character_image_uri or character_video_uri},
+                    "character": {"type": character_type, "uri": character_uri},
                     "reference": {"type": "video", "uri": reference_video_uri},
                     "bodyControl": body_control,
                     "expressionIntensity": expression_intensity,
@@ -506,5 +516,10 @@ class RunwayML_ActTwo(ControlNode):
                     "seed", actual_seed if "actual_seed" in locals() else RunwayML_ActTwo._last_used_seed
                 )
                 return ErrorArtifact(error_message)
+            finally:
+                # Clean up any artifacts uploaded to Griptape Cloud during this run.
+                self._public_character_image.delete_uploaded_artifact()
+                self._public_character_video.delete_uploaded_artifact()
+                self._public_reference_video.delete_uploaded_artifact()
 
         yield generate_character_performance_async

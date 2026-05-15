@@ -5,11 +5,14 @@ import requests
 from griptape.artifacts import ErrorArtifact, ImageUrlArtifact
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
+from griptape_nodes.exe_types.param_components.artifact_url.public_artifact_url_parameter import (
+    PublicArtifactUrlParameter,
+)
+from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
 from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.retained_mode.events.os_events import ExistingFilePolicy
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
 from griptape_nodes.traits.options import Options
-from media import prepare_media_data_uri
 
 
 # Reuse the VideoUrlArtifact defined alongside ImageUrlArtifact in existing node
@@ -38,24 +41,21 @@ class RunwayML_VideoUpscale(ControlNode):
         self.metadata["author"] = "Griptape"
         self.metadata["dependencies"] = {"pip_dependencies": ["requests"]}
 
-        # Input Parameters
-        self.add_parameter(
-            Parameter(
+        # Input video. Wrapped with PublicArtifactUrlParameter so RunwayML receives a
+        # public HTTPS URL it can fetch directly, sidestepping the data-URI body cap.
+        self._public_video = PublicArtifactUrlParameter(
+            node=self,
+            artifact_url_parameter=ParameterVideo(
                 name="video",
-                input_types=["VideoUrlArtifact", "VideoArtifact"],
-                type="VideoUrlArtifact",
                 tooltip=(
-                    "Input video (HTTPS URL or data URI). Allowed content-types: video/mp4, video/webm, "
-                    "video/quicktime, video/mov, video/ogg, video/h264. Max 16MB; max duration 40s."
+                    "Input video. Allowed content-types: video/mp4, video/webm, video/quicktime, "
+                    "video/mov, video/ogg, video/h264. Max 16MB; max duration 40s."
                 ),
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-                ui_options={
-                    "clickable_file_browser": True,
-                    "expander": True,
-                    "display_name": "Video or Path to Video",
-                },
-            )
+            ),
+            disclaimer_message="RunwayML uses this URL to fetch the video for upscaling.",
         )
+        self._public_video.add_input_parameters()
 
         self.add_parameter(
             Parameter(
@@ -97,17 +97,14 @@ class RunwayML_VideoUpscale(ControlNode):
 
     # --- Helpers ---
     def _get_video_uri(self) -> str | None:
-        """Resolve the ``video`` input to a value the /v1/video_upscale endpoint accepts.
+        """Resolve the ``video`` input to a public HTTPS URL via Griptape Cloud upload.
 
-        ``https://`` URLs and ``data:video/...`` URIs pass through; macro paths,
-        local files, and ``http://`` URLs are read via ``File`` and returned as
-        ``data:video/mp4;base64,...`` URIs.
+        Public URLs pass through unchanged; macro paths and local files are uploaded.
+        Returns ``None`` when the parameter is unset.
         """
-        return prepare_media_data_uri(
-            self.get_parameter_value("video"),
-            kind="video",
-            node_name="RunwayML VideoUpscale",
-        )
+        if not self.get_parameter_value("video"):
+            return None
+        return self._public_video.get_public_url_for_parameter()
 
     def _download_and_store_video(self, video_url: str, task_id: str | None = None) -> VideoUrlArtifact:
         try:
@@ -201,9 +198,8 @@ class RunwayML_VideoUpscale(ControlNode):
                 )
             )
 
-        video_uri = self._get_video_uri()
-        if not video_uri or not isinstance(video_uri, str) or not video_uri.strip():
-            errors.append(ValueError("Video input ('video') is required and must be a URL or data URI."))
+        if not self.get_parameter_value("video"):
+            errors.append(ValueError("Video input ('video') is required."))
 
         return errors if errors else None
 
@@ -219,11 +215,13 @@ class RunwayML_VideoUpscale(ControlNode):
         self._log_storage_env_hints()
 
         model_name = str(self.get_parameter_value("model") or DEFAULT_MODEL)
-        video_uri = self._get_video_uri()
 
         def upscale_async() -> VideoUrlArtifact | ErrorArtifact:
             try:
                 api_key = GriptapeNodes.SecretsManager().get_secret(API_KEY_ENV_VAR)
+
+                # Resolve to a public HTTPS URL (uploads to Griptape Cloud if needed).
+                video_uri = self._public_video.get_public_url_for_parameter()
 
                 payload = {"model": model_name, "videoUri": video_uri}
                 logger.info(f"RunwayML VideoUpscale: Creating task with payload keys: {list(payload.keys())}")
@@ -317,5 +315,8 @@ class RunwayML_VideoUpscale(ControlNode):
                 logger.exception(error_message)
                 self.publish_update_to_parameter("video_output", ErrorArtifact(error_message))
                 return ErrorArtifact(error_message)
+            finally:
+                # Clean up any artifact uploaded to Griptape Cloud during this run.
+                self._public_video.delete_uploaded_artifact()
 
         yield upscale_async

@@ -8,11 +8,15 @@ import requests
 from griptape.artifacts import ErrorArtifact, ImageUrlArtifact
 from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
+from griptape_nodes.exe_types.param_components.artifact_url.public_artifact_url_parameter import (
+    PublicArtifactUrlParameter,
+)
+from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
 from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.retained_mode.events.os_events import ExistingFilePolicy
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
 from griptape_nodes.traits.options import Options
-from media import coerce_media_url_or_data_uri, prepare_media_data_uri
+from media import prepare_media_data_uri
 
 SERVICE = "RunwayML"
 API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
@@ -47,20 +51,19 @@ class RunwayML_VideoToVideo(ControlNode):
         )
 
         # Individual parameters
-        # Video Parameter
-        self.add_parameter(
-            Parameter(
+        # Video Parameter. Wrapped with PublicArtifactUrlParameter so RunwayML
+        # receives a public HTTPS URL it can fetch directly, sidestepping the
+        # data-URI body cap.
+        self._public_video = PublicArtifactUrlParameter(
+            node=self,
+            artifact_url_parameter=ParameterVideo(
                 name="video",
-                input_types=["VideoUrlArtifact", "VideoArtifact"],
-                type="VideoUrlArtifact",
-                tooltip="The video to process",
-                ui_options={
-                    "clickable_file_browser": True,
-                    "expander": True,
-                    "display_name": "Video or Path to Video",
-                },
-            )
+                tooltip="The video to process.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            ),
+            disclaimer_message="RunwayML uses this URL to fetch the video for video-to-video generation.",
         )
+        self._public_video.add_input_parameters()
         # Prompt Parameter
         self.add_parameter(
             Parameter(
@@ -248,22 +251,22 @@ class RunwayML_VideoToVideo(ControlNode):
         return f"data:{content_type};base64,{base64_data}"
 
     def _get_video_data_uri(self, param_name: str) -> str | None:
-        """Resolve a video input to a value the /v1/video_to_video endpoint accepts.
+        """Resolve the ``video`` input to a public HTTPS URL via Griptape Cloud upload.
 
-        ``https://`` URLs, ``runway://`` URIs, and ``data:video/...`` URIs pass through
-        unchanged. Anything else (local paths, ``{inputs}/...`` macro paths,
-        ``http://`` URLs, ``file://`` URIs) is read via ``File``, optionally transcoded
-        with ffmpeg, and returned as a ``data:video/mp4;base64,...`` URI so RunwayML
-        receives a known-good format.
+        Public URLs and ``data:video/...`` URIs pass through unchanged; macro paths
+        and local files are uploaded to Griptape Cloud. Returns ``None`` when the
+        parameter is unset.
+
+        Note: this skips the local ``ffmpeg`` transcode step the data-URI path used
+        to perform. RunwayML's API accepts a wider range of formats from a URL than
+        from an inline data URI, so transcoding before upload is no longer necessary
+        in the common case.
         """
-        media_url = coerce_media_url_or_data_uri(self.get_parameter_value(param_name), kind="video")
-        if not media_url:
+        if param_name != "video":
             return None
-
-        if media_url.startswith(("data:video/", "https://", "runway://")):
-            return media_url
-
-        return self._read_to_data_uri(media_url)
+        if not self.get_parameter_value(param_name):
+            return None
+        return self._public_video.get_public_url_for_parameter()
 
     def _get_image_data_uri(self, param_name: str) -> str | None:
         """Resolve a reference-image input to a data URI in a RunwayML-supported format.
@@ -306,13 +309,8 @@ class RunwayML_VideoToVideo(ControlNode):
             )
 
         # Check required video input
-        try:
-            video_data = self._get_video_data_uri("video")
-        except ValueError as e:
-            errors.append(e)
-        else:
-            if not video_data:
-                errors.append(ValueError("Video input ('video') is required and must be a valid URL or data URI."))
+        if not self.get_parameter_value("video"):
+            errors.append(ValueError("Video input ('video') is required."))
 
         # Check prompt
         prompt_val = self.get_parameter_value("prompt")
@@ -363,14 +361,8 @@ class RunwayML_VideoToVideo(ControlNode):
         # Update last used seed for next run
         RunwayML_VideoToVideo._last_used_seed = actual_seed
 
-        # Get video data
-        video_uri = self._get_video_data_uri("video")
-        if not video_uri:
-            error_msg = "Failed to process video input."
-            self.publish_update_to_parameter("video_output", ErrorArtifact(error_msg))
-            raise ValueError(error_msg)
-
-        # Get reference image if provided
+        # Get reference image if provided. This stays inline (data URI) because the
+        # endpoint requires a content-type check that's done on the resolved bytes.
         reference_image_uri = self._get_image_data_uri("reference_image")
 
         def _download_and_store_video(video_url: str, task_id: str | None = None) -> VideoUrlArtifact:
@@ -408,6 +400,9 @@ class RunwayML_VideoToVideo(ControlNode):
         def generate_video_async() -> VideoUrlArtifact | ErrorArtifact:
             try:
                 api_key = GriptapeNodes.SecretsManager().get_secret(API_KEY_ENV_VAR)
+
+                # Resolve to a public HTTPS URL (uploads to Griptape Cloud if needed).
+                video_uri = self._public_video.get_public_url_for_parameter()
 
                 # Build the payload according to the API format
                 task_payload = {
@@ -542,5 +537,8 @@ class RunwayML_VideoToVideo(ControlNode):
                     "seed", actual_seed if "actual_seed" in locals() else RunwayML_VideoToVideo._last_used_seed
                 )
                 return ErrorArtifact(error_message)
+            finally:
+                # Clean up any artifact uploaded to Griptape Cloud during this run.
+                self._public_video.delete_uploaded_artifact()
 
         yield generate_video_async

@@ -5,11 +5,14 @@ import requests
 from griptape.artifacts import ErrorArtifact, ImageUrlArtifact
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
+from griptape_nodes.exe_types.param_components.artifact_url.public_artifact_url_parameter import (
+    PublicArtifactUrlParameter,
+)
+from griptape_nodes.exe_types.param_types.parameter_image import ParameterImage
 from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.retained_mode.events.os_events import ExistingFilePolicy
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
 from griptape_nodes.traits.options import Options
-from media import prepare_media_data_uri
 
 SERVICE = "RunwayML"
 API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
@@ -39,16 +42,18 @@ class RunwayML_ImageToVideo(ControlNode):
         self.metadata["author"] = "Griptape"
         self.metadata["dependencies"] = {"pip_dependencies": ["requests"]}
 
-        # Individual parameters (following Kling pattern)
-        self.add_parameter(
-            Parameter(
+        # Image input. Wrapped with PublicArtifactUrlParameter so RunwayML receives a
+        # public HTTPS URL it can fetch directly, sidestepping the data-URI body cap.
+        self._public_image = PublicArtifactUrlParameter(
+            node=self,
+            artifact_url_parameter=ParameterImage(
                 name="image",
-                input_types=["ImageUrlArtifact", "str"],
-                type="ImageUrlArtifact",
-                tooltip="Input image (required). Accepts ImageUrlArtifact, a public URL string, or a base64 data URI string.",
-                allowed_modes={ParameterMode.INPUT},
-            )
+                tooltip="Input image (required).",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            ),
+            disclaimer_message="RunwayML uses this URL to fetch the image for video generation.",
         )
+        self._public_image.add_input_parameters()
         self.add_parameter(
             Parameter(
                 name="prompt",
@@ -138,12 +143,16 @@ class RunwayML_ImageToVideo(ControlNode):
         )
 
     def _get_image_data_uri(self, param_name: str) -> str | None:
-        """Resolve an image input to a value the /v1/image_to_video endpoint accepts."""
-        return prepare_media_data_uri(
-            self.get_parameter_value(param_name),
-            kind="image",
-            node_name="RunwayML I2V",
-        )
+        """Resolve the ``image`` input to a public HTTPS URL via Griptape Cloud upload.
+
+        Public URLs pass through unchanged; macro paths and local files are uploaded.
+        Returns ``None`` when the parameter is unset.
+        """
+        if param_name != "image":
+            return None
+        if not self.get_parameter_value(param_name):
+            return None
+        return self._public_image.get_public_url_for_parameter()
 
     def validate_node(self) -> list[Exception] | None:
         errors = []
@@ -156,7 +165,7 @@ class RunwayML_ImageToVideo(ControlNode):
                 )
             )
 
-        image_data = self._get_image_data_uri("image")
+        image_data = self.get_parameter_value("image")
         if not image_data:
             errors.append(
                 ValueError(
@@ -229,16 +238,12 @@ class RunwayML_ImageToVideo(ControlNode):
         seed_val = self.get_parameter_value("seed") or 0
         duration_val = self.get_parameter_value("duration") or 10
 
-        # Get image data
-        image_data_uri = self._get_image_data_uri("image")
-        if not image_data_uri:
-            error_msg = "Failed to process image input."
-            self.publish_update_to_parameter("video_output", ErrorArtifact(error_msg))
-            raise ValueError(error_msg)
-
         def generate_video_async() -> VideoUrlArtifact | ErrorArtifact:
             try:
                 api_key = GriptapeNodes.SecretsManager().get_secret(API_KEY_ENV_VAR)
+
+                # Resolve to a public HTTPS URL (uploads to Griptape Cloud if needed).
+                image_data_uri = self._public_image.get_public_url_for_parameter()
 
                 task_payload = {
                     "model": model_name,
@@ -345,5 +350,8 @@ class RunwayML_ImageToVideo(ControlNode):
                 logger.exception(error_message)
                 self.publish_update_to_parameter("video_output", ErrorArtifact(error_message))
                 return ErrorArtifact(error_message)
+            finally:
+                # Clean up any artifact uploaded to Griptape Cloud during this run.
+                self._public_image.delete_uploaded_artifact()
 
         yield generate_video_async
