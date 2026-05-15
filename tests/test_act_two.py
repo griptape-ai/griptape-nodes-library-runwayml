@@ -7,6 +7,7 @@ between Act Two's parameters and the shared helper.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from unittest.mock import patch
 
 import pytest
@@ -20,7 +21,7 @@ def node() -> RunwayML_ActTwo:
 
 
 @pytest.fixture(autouse=True)
-def _stub_secret() -> None:
+def _stub_secret() -> Iterator[None]:
     with patch("act_two.GriptapeNodes") as gn:
         gn.SecretsManager.return_value.get_secret.return_value = "fake-key"
         yield

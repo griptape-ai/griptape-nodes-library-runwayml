@@ -8,6 +8,7 @@ path.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from unittest.mock import patch
 
 import pytest
@@ -21,7 +22,7 @@ def node() -> RunwayML_VideoToVideo:
 
 
 @pytest.fixture(autouse=True)
-def _stub_secret() -> None:
+def _stub_secret() -> Iterator[None]:
     with patch("video_to_video.GriptapeNodes") as gn:
         gn.SecretsManager.return_value.get_secret.return_value = "fake-key"
         yield
