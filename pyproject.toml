@@ -27,6 +27,13 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = ["pyright>=1.1.396", "pytest-asyncio>=0.21.0", "ruff>=0.8.0", "pytest"]
 
+[tool.pytest.ini_options]
+# The library loader puts ``runwayml/`` on ``sys.path`` at runtime (it sees the
+# directory containing ``griptape_nodes_library.json``), so node modules import
+# siblings as top-level packages (``from media import ...``). Mirror that here
+# so tests resolve the same modules the running engine does.
+pythonpath = ["runwayml"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"

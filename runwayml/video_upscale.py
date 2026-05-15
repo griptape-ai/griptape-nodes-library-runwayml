@@ -1,6 +1,5 @@
 import os
 import time
-from urllib.parse import urlparse
 
 import requests
 from griptape.artifacts import ErrorArtifact, ImageUrlArtifact
@@ -10,6 +9,7 @@ from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.retained_mode.events.os_events import ExistingFilePolicy
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
 from griptape_nodes.traits.options import Options
+from media import prepare_media_data_uri
 
 
 # Reuse the VideoUrlArtifact defined alongside ImageUrlArtifact in existing node
@@ -97,19 +97,17 @@ class RunwayML_VideoUpscale(ControlNode):
 
     # --- Helpers ---
     def _get_video_uri(self) -> str | None:
-        src = self.get_parameter_value("video")
-        if not src:
-            return None
-        if isinstance(src, VideoUrlArtifact):
-            return str(src.value)
-        if isinstance(src, ImageUrlArtifact):  # defensive: some flows might reuse ImageUrlArtifact
-            return str(src.value)
-        if isinstance(src, str):
-            return src.strip()
-        if isinstance(src, dict) and "value" in src:
-            return str(src["value"]).strip()
-        logger.warning(f"RunwayML VideoUpscale: Unsupported video input type: {type(src)}")
-        return None
+        """Resolve the ``video`` input to a value the /v1/video_upscale endpoint accepts.
+
+        ``https://`` URLs and ``data:video/...`` URIs pass through; macro paths,
+        local files, and ``http://`` URLs are read via ``File`` and returned as
+        ``data:video/mp4;base64,...`` URIs.
+        """
+        return prepare_media_data_uri(
+            self.get_parameter_value("video"),
+            kind="video",
+            node_name="RunwayML VideoUpscale",
+        )
 
     def _download_and_store_video(self, video_url: str, task_id: str | None = None) -> VideoUrlArtifact:
         try:
@@ -206,14 +204,6 @@ class RunwayML_VideoUpscale(ControlNode):
         video_uri = self._get_video_uri()
         if not video_uri or not isinstance(video_uri, str) or not video_uri.strip():
             errors.append(ValueError("Video input ('video') is required and must be a URL or data URI."))
-
-        # Basic sanity for URLs
-        try:
-            parsed = urlparse(video_uri or "")
-            if not (parsed.scheme in ("http", "https") or (video_uri or "").startswith("data:video")):
-                logger.warning(f"RunwayML VideoUpscale: Unusual video URI: {video_uri}")
-        except Exception:
-            pass
 
         return errors if errors else None
 

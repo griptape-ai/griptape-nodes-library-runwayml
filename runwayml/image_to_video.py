@@ -1,6 +1,5 @@
 import time
 from typing import Any
-from urllib.parse import urlparse
 
 import requests
 from griptape.artifacts import ErrorArtifact, ImageUrlArtifact
@@ -10,6 +9,7 @@ from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.retained_mode.events.os_events import ExistingFilePolicy
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
 from griptape_nodes.traits.options import Options
+from media import prepare_media_data_uri
 
 SERVICE = "RunwayML"
 API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
@@ -138,81 +138,12 @@ class RunwayML_ImageToVideo(ControlNode):
         )
 
     def _get_image_data_uri(self, param_name: str) -> str | None:
-        image_input = self.get_parameter_value(param_name)
-
-        if not image_input:
-            return None
-
-        if isinstance(image_input, ImageUrlArtifact):
-            url_value = image_input.value
-            if url_value.startswith("data:image"):
-                return url_value
-
-            parsed_url = urlparse(url_value)
-            if parsed_url.scheme == "http" and (
-                parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"
-            ):
-                logger.info(f"RunwayML I2V: Converting local HTTP URL to base64 data URI: {url_value}")
-                try:
-                    return File(url_value).read_data_uri(fallback_mime="image/png")
-                except FileLoadError as e:
-                    logger.error(f"RunwayML I2V: Failed to convert local URL {url_value} to base64: {e}")
-                    return None
-            elif parsed_url.scheme == "https":
-                logger.info(f"RunwayML I2V: Using public HTTPS URL for image: {url_value}")
-                return url_value
-            else:
-                logger.warning(
-                    f"RunwayML I2V: ImageUrlArtifact with non-HTTPS/non-local-HTTP URL provided: {url_value}. Attempting to send as is."
-                )
-                return url_value
-
-        elif isinstance(image_input, str):
-            if image_input.strip().startswith("data:image"):
-                return image_input.strip()
-
-            parsed_url = urlparse(image_input.strip())
-            if parsed_url.scheme == "http" and (
-                parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"
-            ):
-                logger.info(f"RunwayML I2V: Converting local HTTP URL string to base64 data URI: {image_input.strip()}")
-                try:
-                    return File(image_input.strip()).read_data_uri(fallback_mime="image/png")
-                except FileLoadError as e:
-                    logger.error(
-                        f"RunwayML I2V: Failed to convert local URL string {image_input.strip()} to base64: {e}"
-                    )
-                    return None
-            elif parsed_url.scheme == "https":
-                logger.info(f"RunwayML I2V: Using public HTTPS URL string for image: {image_input.strip()}")
-                return image_input.strip()
-            else:
-                logger.warning(
-                    f"RunwayML I2V: String input is not a data URI, HTTPS URL, or local HTTP URL: {image_input.strip()}. Attempting to send as is."
-                )
-                return image_input.strip()
-
-        elif isinstance(image_input, dict):
-            logger.info(f"RunwayML I2V: received dict for {param_name}: {image_input}")
-            input_type = image_input.get("type")
-            url_from_dict = image_input.get("value")
-            base64_from_dict = image_input.get("base64")
-            media_type_from_dict = image_input.get("media_type", "image/png")
-
-            if input_type == "ImageUrlArtifact" and url_from_dict:
-                if str(url_from_dict).startswith("data:image"):
-                    return str(url_from_dict)
-                return str(url_from_dict)
-            elif base64_from_dict:
-                if not str(base64_from_dict).startswith(f"data:{media_type_from_dict};base64,"):
-                    return f"data:{media_type_from_dict};base64,{base64_from_dict}"
-                return str(base64_from_dict)
-
-            logger.warning(f"RunwayML I2V: received unhandled dict structure for {param_name}: {image_input}")
-            return None
-
-        logger.warning(f"RunwayML I2V: Unhandled image input type for {param_name}: {type(image_input)}")
-        return None
+        """Resolve an image input to a value the /v1/image_to_video endpoint accepts."""
+        return prepare_media_data_uri(
+            self.get_parameter_value(param_name),
+            kind="image",
+            node_name="RunwayML I2V",
+        )
 
     def validate_node(self) -> list[Exception] | None:
         errors = []

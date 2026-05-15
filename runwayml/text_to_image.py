@@ -1,7 +1,6 @@
 import base64
 import io
 import time
-from urllib.parse import urlparse
 
 import requests
 from griptape.artifacts import BaseArtifact, ErrorArtifact, ImageUrlArtifact
@@ -11,6 +10,7 @@ from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.retained_mode.events.os_events import ExistingFilePolicy
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
 from griptape_nodes.traits.options import Options
+from media import prepare_media_data_uri
 from PIL import Image
 
 
@@ -221,23 +221,26 @@ class RunwayML_TextToImage(ControlNode):
         )
 
     def _get_image_data_uri(self, image_input) -> str | None:
-        """Convert various image input types to data URI or URL format."""
-        logger.info(f"RunwayML T2I: _get_image_data_uri called with type: {type(image_input).__name__}")
+        """Convert various image input types to a data URI or HTTPS URL accepted by RunwayML.
 
+        Inputs that resolve to a local path, macro path, or non-https URL are read via
+        ``File`` and re-encoded as a ``data:image/...`` data URI. Unsupported formats
+        (anything outside JPEG/PNG/WebP) are transcoded to PNG with PIL. Resolved data
+        URIs larger than 5MB are rejected to match the RunwayML API limit.
+        """
         if not image_input:
-            logger.warning("RunwayML T2I: _get_image_data_uri received None/empty input")
             return None
 
         # Supported formats by RunwayML
         SUPPORTED_FORMATS = ["image/png", "image/jpeg", "image/jpg", "image/webp"]
+        MAX_DATA_URI_BYTES = 5 * 1024 * 1024
 
-        def _validate_and_convert_data_uri(data_uri: str) -> str:
+        def _validate_and_convert_data_uri(data_uri: str) -> str | None:
             """Validate data URI format and convert unsupported formats to PNG."""
             if not data_uri.startswith("data:image"):
                 logger.warning(f"RunwayML T2I: Invalid data URI format: {data_uri[:50]}...")
                 return None
 
-            # Extract media type
             try:
                 header, base64_data = data_uri.split(";base64,", 1)
                 media_type = header.replace("data:", "")
@@ -247,184 +250,43 @@ class RunwayML_TextToImage(ControlNode):
 
                 logger.info(f"RunwayML T2I: Converting unsupported format {media_type} to PNG")
 
-                # Convert unsupported format to PNG
-                # Decode base64 to bytes
                 image_bytes = base64.b64decode(base64_data)
-
-                # Open with PIL and convert to PNG
                 with Image.open(io.BytesIO(image_bytes)) as img:
-                    # Convert to RGB if necessary (for formats that might have transparency)
                     if img.mode in ("RGBA", "LA", "P"):
-                        # Keep transparency for PNG
                         if img.mode == "P":
                             img = img.convert("RGBA")
                     elif img.mode not in ("RGB", "RGBA"):
                         img = img.convert("RGB")
 
-                    # Save as PNG
                     output_buffer = io.BytesIO()
                     img.save(output_buffer, format="PNG")
                     output_buffer.seek(0)
-
-                    # Encode back to base64
                     png_base64 = base64.b64encode(output_buffer.getvalue()).decode("utf-8")
-                    converted_uri = f"data:image/png;base64,{png_base64}"
-
-                    logger.info(f"RunwayML T2I: Successfully converted {media_type} to PNG")
-                    return converted_uri
-
+                    return f"data:image/png;base64,{png_base64}"
             except Exception as e:
                 logger.error(f"RunwayML T2I: Failed to convert data URI format: {e}")
                 return None
 
-        if isinstance(image_input, ImageUrlArtifact):
-            logger.info(
-                f"RunwayML T2I: Processing ImageUrlArtifact - value: {getattr(image_input, 'value', 'N/A')[:100]}..."
-            )
-            url_value = image_input.value
-            if url_value.startswith("data:image"):
-                validated_uri = _validate_and_convert_data_uri(url_value)
-                if validated_uri:
-                    return validated_uri
-                else:
-                    logger.warning("RunwayML T2I: Failed to validate/convert ImageUrlArtifact data URI")
-                    return None
+        resolved = prepare_media_data_uri(image_input, kind="image", node_name="RunwayML T2I")
+        if not resolved:
+            return None
 
-            parsed_url = urlparse(url_value)
-            if parsed_url.scheme == "http" and (
-                parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"
-            ):
-                logger.info(f"RunwayML T2I: Converting local HTTP URL to base64 data URI: {url_value}")
-                try:
-                    data_uri = File(url_value).read_data_uri(fallback_mime="image/png")
+        # HTTPS / runway:// URIs are sent to the API as-is.
+        if not resolved.startswith("data:image"):
+            return resolved
 
-                    # Validate and convert the generated data URI
-                    validated_uri = _validate_and_convert_data_uri(data_uri)
-                    if not validated_uri:
-                        logger.warning("RunwayML T2I: Failed to validate/convert local URL data URI")
-                        return None
+        validated = _validate_and_convert_data_uri(resolved)
+        if not validated:
+            return None
 
-                    # Check size limit (5MB for encoded data URI)
-                    if len(validated_uri.encode("utf-8")) > 5 * 1024 * 1024:
-                        logger.warning(
-                            f"RunwayML T2I: Converted data URI exceeds 5MB limit ({len(validated_uri.encode('utf-8')) / (1024 * 1024):.1f}MB)"
-                        )
-                        return None
-
-                    return validated_uri
-                except FileLoadError as e:
-                    logger.error(f"RunwayML T2I: Failed to convert local URL {url_value} to base64: {e}")
-                    return None
-            elif parsed_url.scheme == "https":
-                logger.info(f"RunwayML T2I: Using public HTTPS URL for image: {url_value}")
-                return url_value
-            else:
-                logger.warning(
-                    f"RunwayML T2I: ImageUrlArtifact with non-HTTPS/non-local-HTTP URL provided: {url_value}"
-                )
-                return url_value
-
-        elif isinstance(image_input, str):
-            logger.info(f"RunwayML T2I: Processing string input: {image_input[:100]}...")
-            if image_input.strip().startswith("data:image"):
-                validated_uri = _validate_and_convert_data_uri(image_input.strip())
-                if validated_uri:
-                    return validated_uri
-                else:
-                    logger.warning("RunwayML T2I: Failed to validate/convert string data URI")
-                    return None
-
-            parsed_url = urlparse(image_input.strip())
-            if parsed_url.scheme == "http" and (
-                parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"
-            ):
-                logger.info(f"RunwayML T2I: Converting local HTTP URL string to base64 data URI: {image_input.strip()}")
-                try:
-                    data_uri = File(image_input.strip()).read_data_uri(fallback_mime="image/png")
-
-                    # Validate and convert the generated data URI
-                    validated_uri = _validate_and_convert_data_uri(data_uri)
-                    if not validated_uri:
-                        logger.warning("RunwayML T2I: Failed to validate/convert local URL data URI")
-                        return None
-
-                    # Check size limit (5MB for encoded data URI)
-                    if len(validated_uri.encode("utf-8")) > 5 * 1024 * 1024:
-                        logger.warning(
-                            f"RunwayML T2I: Converted data URI exceeds 5MB limit ({len(validated_uri.encode('utf-8')) / (1024 * 1024):.1f}MB)"
-                        )
-                        return None
-
-                    return validated_uri
-                except FileLoadError as e:
-                    logger.error(
-                        f"RunwayML T2I: Failed to convert local URL string {image_input.strip()} to base64: {e}"
-                    )
-                    return None
-            elif parsed_url.scheme == "https":
-                logger.info(f"RunwayML T2I: Using public HTTPS URL string for image: {image_input.strip()}")
-                return image_input.strip()
-            else:
-                logger.warning(
-                    f"RunwayML T2I: String input is not a data URI, HTTPS URL, or local HTTP URL: {image_input.strip()}"
-                )
-                return image_input.strip()
-
-        elif isinstance(image_input, dict):
-            logger.info("RunwayML T2I: Processing dictionary representation of image artifact")
-            # Handle dictionary representation of ImageUrlArtifact (from file upload)
-            if "value" in image_input and "type" in image_input:
-                if image_input["type"] == "ImageUrlArtifact":
-                    url_value = image_input["value"]
-                    logger.info(f"RunwayML T2I: Dictionary contains ImageUrlArtifact with URL: {url_value}")
-
-                    if url_value.startswith("data:image"):
-                        return url_value
-
-                    parsed_url = urlparse(url_value)
-                    if parsed_url.scheme == "http" and (
-                        parsed_url.hostname == "localhost" or parsed_url.hostname == "127.0.0.1"
-                    ):
-                        logger.info(
-                            f"RunwayML T2I: Converting local HTTP URL from dict to base64 data URI: {url_value}"
-                        )
-                        try:
-                            data_uri = File(url_value).read_data_uri(fallback_mime="image/png")
-
-                            # Validate and convert the generated data URI
-                            validated_uri = _validate_and_convert_data_uri(data_uri)
-                            if not validated_uri:
-                                logger.warning("RunwayML T2I: Failed to validate/convert local URL data URI")
-                                return None
-
-                            # Check size limit (5MB for encoded data URI)
-                            if len(validated_uri.encode("utf-8")) > 5 * 1024 * 1024:
-                                logger.warning(
-                                    f"RunwayML T2I: Converted data URI exceeds 5MB limit ({len(validated_uri.encode('utf-8')) / (1024 * 1024):.1f}MB)"
-                                )
-                                return None
-
-                            logger.info(
-                                f"RunwayML T2I: Successfully converted dict URL to data URI ({len(validated_uri)} chars)"
-                            )
-                            return validated_uri
-                        except FileLoadError as e:
-                            logger.error(f"RunwayML T2I: Failed to convert dict URL {url_value} to base64: {e}")
-                            return None
-                    elif parsed_url.scheme == "https":
-                        logger.info(f"RunwayML T2I: Using public HTTPS URL from dict: {url_value}")
-                        return url_value
-                    else:
-                        logger.warning(f"RunwayML T2I: Dict URL is not HTTPS or local HTTP: {url_value}")
-                        return url_value
-
+        if len(validated.encode("utf-8")) > MAX_DATA_URI_BYTES:
             logger.warning(
-                f"RunwayML T2I: Dictionary does not contain expected image artifact structure: {list(image_input.keys())}"
+                f"RunwayML T2I: Converted data URI exceeds 5MB limit "
+                f"({len(validated.encode('utf-8')) / (1024 * 1024):.1f}MB)"
             )
             return None
 
-        logger.warning(f"RunwayML T2I: Unhandled image input type: {type(image_input)}")
-        return None
+        return validated
 
     def _download_and_store_image(self, image_url: str, task_id: str = None) -> ImageUrlArtifact:
         """Download image from URL and store via StaticFilesManager."""

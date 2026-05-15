@@ -1,5 +1,4 @@
 import time
-from urllib.parse import urlparse
 
 import requests
 from griptape.artifacts import ErrorArtifact, ImageUrlArtifact
@@ -9,6 +8,7 @@ from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.retained_mode.events.os_events import ExistingFilePolicy
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
 from griptape_nodes.traits.options import Options
+from media import prepare_media_data_uri
 
 SERVICE = "RunwayML"
 API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
@@ -222,116 +222,17 @@ class RunwayML_ActTwo(ControlNode):
         return super().after_value_set(parameter, value)
 
     def _get_data_uri(self, param_name: str) -> str | None:
+        """Resolve an input parameter to a value the character_performance endpoint accepts.
+
+        Returns an ``https://``, ``runway://``, or ``data:<kind>/...`` URI, or ``None``
+        when the parameter is unset or could not be loaded.
         """
-        Extracts and processes data URI from different input types.
-        Works with images and videos. Always returns a data URI, never a URL.
-        """
-        input_value = self.get_parameter_value(param_name)
-
-        if not input_value:
-            logger.info(f"RunwayML Act Two: No input value for {param_name}")
-            return None
-
-        logger.info(
-            f"RunwayML Act Two: Input value for {param_name}: type={type(input_value).__name__}, repr={repr(input_value)[:200]}"
+        kind = "image" if param_name == "character_image" else "video"
+        return prepare_media_data_uri(
+            self.get_parameter_value(param_name),
+            kind=kind,
+            node_name="RunwayML Act Two",
         )
-
-        # Get the content type prefix based on parameter name
-        is_image = param_name == "character_image"
-        content_type_prefix = "data:image" if is_image else "data:video"
-        expected_media_type = "image/png" if is_image else "video/mp4"
-        logger.info(f"RunwayML Act Two: Processing {param_name} with type {type(input_value).__name__}")
-        logger.info(
-            f"RunwayML Act Two: Input value attributes: {[attr for attr in dir(input_value) if not attr.startswith('_')][:10]}"
-        )
-
-        # Handle URL artifacts (including VideoUrlArtifact from other modules)
-        # Use duck typing - if it has a 'value' attribute, treat it as a URL artifact
-        if hasattr(input_value, "value"):
-            logger.info("RunwayML Act Two: Detected URL artifact with 'value' attribute")
-            url_value = getattr(input_value, "value", None)
-            logger.info(f"RunwayML Act Two: Extracted URL value: {str(url_value)[:100]}...")
-            if not url_value:
-                logger.warning(f"RunwayML Act Two: URL artifact has no value: {type(input_value).__name__}")
-                return None
-            if url_value.startswith(content_type_prefix):
-                return url_value
-
-            # All URLs need to be converted to data URIs
-            parsed_url = urlparse(url_value)
-            if parsed_url.scheme in ["http", "https"]:
-                logger.info(f"RunwayML Act Two: Converting URL to base64 data URI: {url_value}")
-                try:
-                    return File(url_value).read_data_uri(fallback_mime=expected_media_type)
-                except FileLoadError as e:
-                    logger.error(f"RunwayML Act Two: Failed to convert URL {url_value} to base64: {e}")
-                    return None
-            else:
-                logger.warning(
-                    f"RunwayML Act Two: URL artifact with non-HTTP/HTTPS URL provided: {url_value}. Cannot process."
-                )
-                return None
-
-        # Handle string input (URL or data URI)
-        elif isinstance(input_value, str):
-            logger.info("RunwayML Act Two: Detected string input")
-            if input_value.strip().startswith(content_type_prefix):
-                return input_value.strip()
-
-            # All URLs need to be converted to data URIs
-            parsed_url = urlparse(input_value.strip())
-            if parsed_url.scheme in ["http", "https"]:
-                logger.info(f"RunwayML Act Two: Converting URL string to base64 data URI: {input_value.strip()}")
-                try:
-                    return File(input_value.strip()).read_data_uri(fallback_mime=expected_media_type)
-                except FileLoadError as e:
-                    logger.error(f"RunwayML Act Two: Failed to convert URL string {input_value.strip()} to base64: {e}")
-                    return None
-            else:
-                logger.warning(
-                    f"RunwayML Act Two: String input for {param_name} is not a data URI or valid URL: {input_value.strip()}. Cannot process."
-                )
-                return None
-
-        # Handle dictionary input
-        elif isinstance(input_value, dict):
-            logger.info("RunwayML Act Two: Detected dictionary input")
-            logger.info(f"RunwayML Act Two: received dict for {param_name}: {input_value}")
-            input_type = input_value.get("type")
-            url_from_dict = input_value.get("value")
-            base64_from_dict = input_value.get("base64")
-            media_type_from_dict = input_value.get("media_type", "video/mp4")
-
-            if ("UrlArtifact" in str(input_type)) and url_from_dict:
-                if str(url_from_dict).startswith(content_type_prefix):
-                    return str(url_from_dict)
-
-                # Convert URL to data URI
-                parsed_url = urlparse(str(url_from_dict))
-                if parsed_url.scheme in ["http", "https"]:
-                    logger.info(
-                        f"RunwayML Act Two: Converting dict URL to base64 data URI: {str(url_from_dict)[:50]}..."
-                    )
-                    try:
-                        return File(str(url_from_dict)).read_data_uri(fallback_mime=expected_media_type)
-                    except FileLoadError as e:
-                        logger.error(f"RunwayML Act Two: Failed to convert dict URL to base64: {e}")
-                        return None
-                else:
-                    logger.warning(
-                        f"RunwayML Act Two: Dict URL with non-HTTP/HTTPS URL provided: {str(url_from_dict)[:50]}... Cannot process."
-                    )
-                    return None
-            elif base64_from_dict:
-                if not str(base64_from_dict).startswith(f"data:{media_type_from_dict};base64,"):
-                    return f"data:{media_type_from_dict};base64,{base64_from_dict}"
-                return str(base64_from_dict)
-
-            logger.warning(f"RunwayML Act Two: received unhandled dict structure for {param_name}: {input_value}")
-            return None
-
-        logger.warning(f"RunwayML Act Two: Unhandled input type for {param_name}: {type(input_value)}")
-        return None
 
     def validate_node(self) -> list[Exception] | None:
         errors = []
@@ -348,20 +249,16 @@ class RunwayML_ActTwo(ControlNode):
         character_type = self.get_parameter_value("character_type") or DEFAULT_CHARACTER_TYPE
 
         if character_type == "image":
-            character_image_uri = self._get_data_uri("character_image")
-            if not character_image_uri:
+            if not self._get_data_uri("character_image"):
                 errors.append(ValueError("Character image is required when character type is 'image'."))
         elif character_type == "video":
-            character_video_uri = self._get_data_uri("character_video")
-            if not character_video_uri:
+            if not self._get_data_uri("character_video"):
                 errors.append(ValueError("Character video is required when character type is 'video'."))
         else:
             errors.append(ValueError(f"Invalid character type: {character_type}. Must be 'image' or 'video'."))
 
         # Validate reference video
-        reference_video_uri = self._get_data_uri("reference_video")
-
-        if not reference_video_uri:
+        if not self._get_data_uri("reference_video"):
             errors.append(ValueError("Reference video ('reference_video') is required."))
 
         # Validate aspect ratio

@@ -3,16 +3,16 @@ import os
 import subprocess
 import tempfile
 import time
-from urllib.parse import urlparse
 
 import requests
-from griptape.artifacts import ErrorArtifact, ImageUrlArtifact, UrlArtifact
+from griptape.artifacts import ErrorArtifact, ImageUrlArtifact
 from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
 from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.retained_mode.events.os_events import ExistingFilePolicy
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
 from griptape_nodes.traits.options import Options
+from media import coerce_media_url_or_data_uri, prepare_media_data_uri
 
 SERVICE = "RunwayML"
 API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
@@ -247,257 +247,52 @@ class RunwayML_VideoToVideo(ControlNode):
 
         return f"data:{content_type};base64,{base64_data}"
 
-    def _coerce_video_uri(self, candidate: str) -> str | None:
-        """
-        Coerces a string into a `videoUri` value RunwayML will accept.
-
-        RunwayML's `/v1/video_to_video` endpoint only accepts `https://`, `runway://`,
-        or `data:video/...` URIs. This method:
-
-        - passes `https://` / `runway://` / `data:video/...` through unchanged
-        - downloads `http://` URLs to a `data:video/...` data URI
-        - reads `file://` URIs and bare local file paths into a `data:video/...` data URI
-        - raises ValueError for any other scheme so the caller surfaces a clear error
-          before the API call
-        """
-        candidate = candidate.strip()
-        if candidate.startswith("data:video") or candidate.startswith("https://") or candidate.startswith("runway://"):
-            return candidate
-
-        parsed = urlparse(candidate)
-        if parsed.scheme == "http":
-            logger.info(f"RunwayML V2V: Converting HTTP URL to base64 data URI: {candidate}")
-            return self._read_to_data_uri(candidate)
-
-        if parsed.scheme == "file":
-            local_path = parsed.path
-            logger.info(f"RunwayML V2V: Reading file:// URI to base64 data URI: {local_path}")
-            return self._read_to_data_uri(local_path)
-
-        # Empty scheme covers POSIX absolute and relative paths; a single-character
-        # scheme covers Windows drive letters (e.g. `C:\foo.mp4`).
-        if parsed.scheme == "" or len(parsed.scheme) == 1:
-            logger.info(f"RunwayML V2V: Reading local file path to base64 data URI: {candidate}")
-            return self._read_to_data_uri(candidate)
-
-        raise ValueError(
-            "RunwayML V2V: video URI must be an https:// URL, a runway:// URI, a data:video/... data URI, "
-            f"a file:// URI, or a local file path; got: {candidate!r}"
-        )
-
     def _get_video_data_uri(self, param_name: str) -> str | None:
-        """
-        Gets a video URL or converts to data URI if needed.
-        If ffmpeg is available, will transcode video to ensure compatibility.
-        """
-        video_input = self.get_parameter_value(param_name)
+        """Resolve a video input to a value the /v1/video_to_video endpoint accepts.
 
-        if not video_input:
+        ``https://`` URLs, ``runway://`` URIs, and ``data:video/...`` URIs pass through
+        unchanged. Anything else (local paths, ``{inputs}/...`` macro paths,
+        ``http://`` URLs, ``file://`` URIs) is read via ``File``, optionally transcoded
+        with ffmpeg, and returned as a ``data:video/mp4;base64,...`` URI so RunwayML
+        receives a known-good format.
+        """
+        media_url = coerce_media_url_or_data_uri(self.get_parameter_value(param_name), kind="video")
+        if not media_url:
             return None
 
-        # Handle URL artifacts
-        if isinstance(video_input, (VideoUrlArtifact, ImageUrlArtifact, UrlArtifact)):
-            return self._coerce_video_uri(video_input.value)
+        if media_url.startswith(("data:video/", "https://", "runway://")):
+            return media_url
 
-        # Handle string input (URL or data URI)
-        elif isinstance(video_input, str):
-            return self._coerce_video_uri(video_input)
-
-        # Handle dictionary input
-        elif isinstance(video_input, dict):
-            logger.info(f"RunwayML V2V: received dict for {param_name}: {video_input}")
-            input_type = video_input.get("type")
-            url_from_dict = video_input.get("value")
-            base64_from_dict = video_input.get("base64")
-            media_type_from_dict = video_input.get("media_type", "video/mp4")
-
-            if input_type in ["VideoUrlArtifact", "ImageUrlArtifact", "UrlArtifact"] and url_from_dict:
-                return self._coerce_video_uri(str(url_from_dict))
-            elif base64_from_dict:
-                if not str(base64_from_dict).startswith(f"data:{media_type_from_dict};base64,"):
-                    return f"data:{media_type_from_dict};base64,{base64_from_dict}"
-                return str(base64_from_dict)
-
-            logger.warning(f"RunwayML V2V: received unhandled dict structure for {param_name}: {video_input}")
-            return None
-
-        logger.warning(f"RunwayML V2V: Unhandled video input type for {param_name}: {type(video_input)}")
-        return None
+        return self._read_to_data_uri(media_url)
 
     def _get_image_data_uri(self, param_name: str) -> str | None:
+        """Resolve a reference-image input to a data URI in a RunwayML-supported format.
+
+        RunwayML's ``/v1/video_to_video`` endpoint only accepts JPEG, PNG, or WebP
+        reference images. HTTPS URLs are downloaded so the format can be inspected;
+        data URIs are validated in place. Unsupported formats raise ``ValueError``.
         """
-        Gets an image URL or converts to data URI if needed.
-        Validates that the image format is supported (JPEG, PNG, WebP).
-        Raises ValueError for unsupported formats.
-        """
-        # Supported image formats for RunwayML API
         SUPPORTED_FORMATS = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
 
-        image_input = self.get_parameter_value(param_name)
-
-        if not image_input:
+        # Force HTTPS download via ``pass_through_schemes=()`` so we always end up with a
+        # data URI whose content type we can inspect.
+        data_uri = prepare_media_data_uri(
+            self.get_parameter_value(param_name),
+            kind="image",
+            node_name="RunwayML V2V",
+            pass_through_schemes=(),
+        )
+        if not data_uri:
             return None
 
-        # Handle ImageArtifact
-        if hasattr(image_input, "base64"):
-            # Convert format to media type
-            format_to_media_type = {
-                "JPEG": "image/jpeg",
-                "PNG": "image/png",
-                "WEBP": "image/webp",
-                "GIF": "image/gif",  # Not supported, will be caught below
-            }
-            image_format = getattr(image_input, "format", "")
-            media_type = format_to_media_type.get(image_format, "image/png")
-
-            # Check if format is supported
-            if media_type not in SUPPORTED_FORMATS:
-                error_msg = (
-                    f"Unsupported reference image format: {image_format}. Supported formats are JPEG, PNG, and WebP."
-                )
-                logger.error(f"RunwayML V2V: {error_msg}")
-                raise ValueError(error_msg)
-
-            if not image_input.base64.startswith(f"data:{media_type};base64,"):
-                return f"data:{media_type};base64,{image_input.base64}"
-            return image_input.base64
-
-        # Handle URL artifacts
-        elif hasattr(image_input, "value"):
-            url_value = image_input.value
-            if url_value.startswith("data:image"):
-                # Check data URI format
-                content_type = url_value.split(":")[1].split(";")[0]
-                if content_type not in SUPPORTED_FORMATS:
-                    error_msg = f"Unsupported reference image format: {content_type}. Supported formats are image/jpeg, image/png, and image/webp."
-                    logger.error(f"RunwayML V2V: {error_msg}")
-                    raise ValueError(error_msg)
-                return url_value
-
-            parsed_url = urlparse(url_value)
-            if parsed_url.scheme in ["http", "https"]:
-                logger.info(f"RunwayML V2V: Converting URL to base64 data URI: {url_value}")
-                try:
-                    data_uri = File(url_value).read_data_uri(fallback_mime="image/png")
-                    content_type = data_uri.split(":")[1].split(";")[0]
-
-                    # Check if content type is supported
-                    if content_type not in SUPPORTED_FORMATS:
-                        error_msg = f"Unsupported reference image format: {content_type}. Supported formats are image/jpeg, image/png, and image/webp."
-                        logger.error(f"RunwayML V2V: {error_msg}")
-                        raise ValueError(error_msg)
-
-                    return data_uri
-                except ValueError as ve:
-                    # Re-raise validation errors
-                    raise ve
-                except FileLoadError as e:
-                    logger.error(f"RunwayML V2V: Failed to convert URL {url_value} to base64: {e}")
-                    return None
-            else:
-                logger.warning(
-                    f"RunwayML V2V: URL artifact with non-HTTP/HTTPS URL provided: {url_value}. Cannot process."
-                )
-                return None
-
-        # Handle string input (URL or data URI)
-        elif isinstance(image_input, str):
-            if image_input.strip().startswith("data:image"):
-                # Check data URI format
-                content_type = image_input.strip().split(":")[1].split(";")[0]
-                if content_type not in SUPPORTED_FORMATS:
-                    error_msg = f"Unsupported reference image format: {content_type}. Supported formats are image/jpeg, image/png, and image/webp."
-                    logger.error(f"RunwayML V2V: {error_msg}")
-                    raise ValueError(error_msg)
-                return image_input.strip()
-
-            parsed_url = urlparse(image_input.strip())
-            if parsed_url.scheme in ["http", "https"]:
-                logger.info(f"RunwayML V2V: Converting URL string to base64 data URI: {image_input.strip()}")
-                try:
-                    data_uri = File(image_input.strip()).read_data_uri(fallback_mime="image/png")
-                    content_type = data_uri.split(":")[1].split(";")[0]
-
-                    # Check if content type is supported
-                    if content_type not in SUPPORTED_FORMATS:
-                        error_msg = f"Unsupported reference image format: {content_type}. Supported formats are image/jpeg, image/png, and image/webp."
-                        logger.error(f"RunwayML V2V: {error_msg}")
-                        raise ValueError(error_msg)
-
-                    return data_uri
-                except ValueError as ve:
-                    # Re-raise validation errors
-                    raise ve
-                except FileLoadError as e:
-                    logger.error(f"RunwayML V2V: Failed to convert URL string {image_input.strip()} to base64: {e}")
-                    return None
-            else:
-                logger.warning(
-                    f"RunwayML V2V: String input for {param_name} is not a data URI or valid URL: {image_input.strip()}. Cannot process."
-                )
-                return None
-
-        # Handle dictionary input
-        elif isinstance(image_input, dict):
-            logger.info(f"RunwayML V2V: received dict for {param_name}: {image_input}")
-            input_type = image_input.get("type")
-            url_from_dict = image_input.get("value")
-            base64_from_dict = image_input.get("base64")
-            media_type_from_dict = image_input.get("media_type", "image/png")
-
-            # Check if media type is supported
-            if media_type_from_dict not in SUPPORTED_FORMATS:
-                error_msg = f"Unsupported reference image format: {media_type_from_dict}. Supported formats are image/jpeg, image/png, and image/webp."
-                logger.error(f"RunwayML V2V: {error_msg}")
-                raise ValueError(error_msg)
-
-            if (input_type in ["ImageUrlArtifact"]) and url_from_dict:
-                if str(url_from_dict).startswith("data:image"):
-                    # Check data URI format for URL
-                    data_uri = str(url_from_dict)
-                    content_type = data_uri.split(":")[1].split(";")[0]
-                    if content_type not in SUPPORTED_FORMATS:
-                        error_msg = f"Unsupported reference image format: {content_type}. Supported formats are image/jpeg, image/png, and image/webp."
-                        logger.error(f"RunwayML V2V: {error_msg}")
-                        raise ValueError(error_msg)
-                    return data_uri
-
-                parsed_url = urlparse(str(url_from_dict))
-                if parsed_url.scheme in ["http", "https"]:
-                    logger.info(f"RunwayML V2V: Converting dict URL to base64 data URI: {str(url_from_dict)[:50]}...")
-                    try:
-                        data_uri = File(str(url_from_dict)).read_data_uri(fallback_mime="image/png")
-                        content_type = data_uri.split(":")[1].split(";")[0]
-
-                        # Check if content type is supported
-                        if content_type not in SUPPORTED_FORMATS:
-                            error_msg = f"Unsupported reference image format: {content_type}. Supported formats are image/jpeg, image/png, and image/webp."
-                            logger.error(f"RunwayML V2V: {error_msg}")
-                            raise ValueError(error_msg)
-
-                        return data_uri
-                    except ValueError as ve:
-                        # Re-raise validation errors
-                        raise ve
-                    except FileLoadError as e:
-                        logger.error(f"RunwayML V2V: Failed to convert dict URL to base64: {e}")
-                        return None
-                else:
-                    logger.warning(
-                        f"RunwayML V2V: Dict URL with non-HTTP/HTTPS URL provided: {str(url_from_dict)[:50]}... Cannot process."
-                    )
-                    return None
-            elif input_type == "ImageArtifact" and base64_from_dict:
-                # For base64 data, use provided media type (already validated above)
-                if not str(base64_from_dict).startswith(f"data:{media_type_from_dict};base64,"):
-                    return f"data:{media_type_from_dict};base64,{base64_from_dict}"
-                return str(base64_from_dict)
-
-            logger.warning(f"RunwayML V2V: received unhandled dict structure for {param_name}: {image_input}")
-            return None
-
-        logger.warning(f"RunwayML V2V: Unhandled input type for {param_name}: {type(image_input)}")
-        return None
+        # ``prepare_media_data_uri`` always returns a ``data:image/...`` URI here.
+        content_type = data_uri.split(":", 1)[1].split(";", 1)[0]
+        if content_type not in SUPPORTED_FORMATS:
+            raise ValueError(
+                f"Unsupported reference image format: {content_type}. "
+                "Supported formats are image/jpeg, image/png, and image/webp."
+            )
+        return data_uri
 
     def validate_node(self) -> list[Exception] | None:
         errors = []
