@@ -7,8 +7,8 @@ import requests
 from griptape.artifacts import BaseArtifact, ErrorArtifact, ImageUrlArtifact
 from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterList, ParameterMode
 from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
+from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.files.file import File, FileLoadError
-from griptape_nodes.retained_mode.events.os_events import ExistingFilePolicy
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
 from griptape_nodes.traits.options import Options
 from media import prepare_media_data_uri
@@ -221,6 +221,16 @@ class RunwayML_TextToImage(ControlNode):
             )
         )
 
+        # Save the generated image into the active project workspace via the standard
+        # ProjectFileParameter so the file lives next to the user's other artifacts
+        # rather than inside the engine's ephemeral static-files directory.
+        self._output_file = ProjectFileParameter(
+            node=self,
+            name="output_file",
+            default_filename="runwayml_text_to_image.png",
+        )
+        self._output_file.add_parameter()
+
     def _get_image_data_uri(self, image_input) -> str | None:
         """Convert various image input types to a data URI or HTTPS URL accepted by RunwayML.
 
@@ -290,35 +300,16 @@ class RunwayML_TextToImage(ControlNode):
         return validated
 
     def _download_and_store_image(self, image_url: str, task_id: str = None) -> ImageUrlArtifact:
-        """Download image from URL and store via StaticFilesManager."""
+        """Download image from URL and store in the project workspace."""
         try:
             logger.info(f"RunwayML T2I: Downloading image from {image_url}")
             file_content = File(image_url).read()
 
-            # Determine file extension from content type
-            content_type = file_content.mime_type if file_content.mime_type else "image/png"
-            if "jpeg" in content_type or "jpg" in content_type:
-                extension = "jpg"
-            elif "png" in content_type:
-                extension = "png"
-            elif "webp" in content_type:
-                extension = "webp"
-            else:
-                extension = "jpg"  # Default fallback
-
-            # Generate filename using task ID if provided, otherwise use timestamp
-            if task_id:
-                filename = f"runwayml_generated_image_{task_id}.{extension}"
-            else:
-                timestamp = int(time.time() * 1000)  # milliseconds for uniqueness
-                filename = f"runwayml_generated_image_{timestamp}.{extension}"
-
-            # Save via StaticFilesManager
-            static_url = GriptapeNodes.StaticFilesManager().save_static_file(
-                file_content.content, filename, ExistingFilePolicy.CREATE_NEW
-            )
-
-            return ImageUrlArtifact(value=static_url, name="runwayml_generated_image")
+            logger.info("RunwayML T2I: Writing image bytes to project workspace...")
+            dest = self._output_file.build_file()
+            saved = dest.write_bytes(file_content.content)
+            logger.info(f"RunwayML T2I: ✅ Image saved as {saved.name} at {saved.location}")
+            return ImageUrlArtifact(value=saved.location, name=saved.name)
 
         except FileLoadError as e:
             logger.error(f"RunwayML T2I: Failed to download and store image: {e}")
