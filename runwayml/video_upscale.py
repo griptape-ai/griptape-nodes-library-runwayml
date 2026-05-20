@@ -1,3 +1,4 @@
+import json
 import os
 import time
 
@@ -290,10 +291,17 @@ class RunwayML_VideoUpscale(ControlNode):
                             return ErrorArtifact(err_msg)
 
                     if status == "FAILED":
+                        failure_reason = (
+                            status_resp.get("error") or status_resp.get("failure") or status_resp.get("failureCode")
+                        )
                         error_msg = f"RunwayML VideoUpscale failed (Task ID: {task_id})."
-                        if getattr(status_resp, "error", None):
-                            error_msg += f" Reason: {getattr(status_resp, 'error', None)}"
-                        logger.error(error_msg)
+                        if failure_reason:
+                            error_msg += f" Reason: {failure_reason}"
+                        logger.error(
+                            "%s Full task status: %s",
+                            error_msg,
+                            json.dumps(status_resp, default=str),
+                        )
                         self.publish_update_to_parameter("video_output", ErrorArtifact(error_msg))
                         return ErrorArtifact(error_msg)
 

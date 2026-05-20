@@ -1,5 +1,6 @@
 import base64
 import io
+import json
 import time
 
 import requests
@@ -673,11 +674,17 @@ class RunwayML_TextToImage(ControlNode):
                             return ErrorArtifact(err_msg)
 
                     elif status == "FAILED":
+                        failure_reason = (
+                            task_status.get("error") or task_status.get("failure") or task_status.get("failureCode")
+                        )
                         error_msg = f"RunwayML T2I generation failed (Task ID: {task_id})."
-                        error_detail = task_status.get("error")
-                        if error_detail:
-                            error_msg += f" Reason: {error_detail}"
-                        logger.error(error_msg)
+                        if failure_reason:
+                            error_msg += f" Reason: {failure_reason}"
+                        logger.error(
+                            "%s Full task status: %s",
+                            error_msg,
+                            json.dumps(task_status, default=str),
+                        )
                         self.publish_update_to_parameter("image_output", ErrorArtifact(error_msg))
                         self.publish_update_to_parameter("seed", actual_seed)
                         return ErrorArtifact(error_msg)

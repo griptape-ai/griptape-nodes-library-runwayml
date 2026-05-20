@@ -1,3 +1,4 @@
+import json
 import time
 from typing import Any
 
@@ -330,10 +331,17 @@ class RunwayML_ImageToVideo(ControlNode):
                             return ErrorArtifact(err_msg)
 
                     elif status == "FAILED":
+                        failure_reason = (
+                            task_status.get("error") or task_status.get("failure") or task_status.get("failureCode")
+                        )
                         error_msg = f"RunwayML I2V generation failed (Task ID: {task_id})."
-                        if task_status.error:
-                            error_msg += f" Reason: {task_status.error}"
-                        logger.error(error_msg)
+                        if failure_reason:
+                            error_msg += f" Reason: {failure_reason}"
+                        logger.error(
+                            "%s Full task status: %s",
+                            error_msg,
+                            json.dumps(task_status, default=str),
+                        )
                         self.publish_update_to_parameter("video_output", ErrorArtifact(error_msg))
                         return ErrorArtifact(error_msg)
 
