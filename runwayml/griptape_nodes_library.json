@@ -25,10 +25,7 @@
             "Image Generation"
         ],
         "dependencies": {
-            "pip_dependencies": [
-                "requests",
-                "Pillow"
-            ]
+            "pip_dependencies": []
         }
     },
     "categories": [
