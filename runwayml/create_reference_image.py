@@ -1,43 +1,19 @@
+import asyncio
+import hashlib
 import io
+from typing import Any
 
-from griptape.artifacts import BaseArtifact, ImageUrlArtifact
+from artifacts import (
+    MAX_REFERENCE_ASPECT_RATIO,
+    MIN_REFERENCE_ASPECT_RATIO,
+    ReferenceImageArtifact,
+)
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import DataNode
+from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.retained_mode.griptape_nodes import logger
 from PIL import Image
-
-
-class ReferenceImageArtifact(BaseArtifact):
-    """
-    A custom artifact that combines an image with a reference tag.
-    Used for RunwayML text-to-image generation with reference images.
-    """
-
-    def __init__(self, image: ImageUrlArtifact | str, tag: str, name: str | None = None, **kwargs):
-        # Create the value dictionary for the base artifact
-        value = {"image": image, "tag": tag.strip() if tag else ""}
-        super().__init__(value=value, name=name, **kwargs)
-        self.image = image
-        self.tag = tag.strip() if tag else ""
-
-    def to_text(self) -> str:
-        """Return a text representation of the reference image."""
-        image_type = type(self.image).__name__
-        if hasattr(self.image, "value"):
-            image_preview = (
-                str(self.image.value)[:50] + "..." if len(str(self.image.value)) > 50 else str(self.image.value)
-            )
-        else:
-            image_preview = str(self.image)[:50] + "..." if len(str(self.image)) > 50 else str(self.image)
-
-        return f"ReferenceImage(tag='{self.tag}', image={image_type}({image_preview}))"
-
-    def __str__(self) -> str:
-        return self.to_text()
-
-    def __repr__(self) -> str:
-        return self.to_text()
 
 
 class RunwayML_CreateReferenceImage(DataNode):
@@ -47,111 +23,100 @@ class RunwayML_CreateReferenceImage(DataNode):
         self.description = "Creates a reference image with a tag for use in RunwayML text-to-image generation."
         self.metadata["author"] = "Griptape"
 
-        # Input Parameters
         self.add_parameter(
             Parameter(
                 name="image",
-                input_types=["ImageUrlArtifact", "str"],
+                input_types=["ImageUrlArtifact", "ImageArtifact", "str"],
                 output_type="ImageUrlArtifact",
                 type="ImageUrlArtifact",
                 default_value=None,
-                tooltip="The image to use as a reference. Can be ImageUrlArtifact or URL string. Click to upload a file.",
+                tooltip="The image to use as a reference. Accepts an image artifact or a URL string.",
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
                 ui_options={"clickable_file_browser": True},
             )
         )
-
         self.add_parameter(
-            Parameter(
+            ParameterString(
                 name="tag",
-                input_types=["str"],
-                output_type="str",
-                type="str",
                 default_value="",
-                tooltip="The tag to reference this image in prompts (e.g., 'EiffelTower'). Use @tag in your prompt. If empty, a default tag will be generated.",
+                tooltip=(
+                    "The tag used to address this image from a prompt, for example 'EiffelTower' "
+                    "then '@EiffelTower' in the prompt. A tag is generated if left empty."
+                ),
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-                ui_options={"placeholder_text": "e.g., EiffelTower (optional)"},
+                placeholder_text="e.g., EiffelTower (optional)",
             )
         )
-
-        # Output Parameter
         self.add_parameter(
             Parameter(
                 name="reference_image",
                 output_type="ReferenceImageArtifact",
                 type="ReferenceImageArtifact",
                 default_value=None,
-                tooltip="The reference image artifact with tag.",
+                tooltip="The reference image artifact with its tag. Connect to a Runway Text-to-Image node.",
                 allowed_modes={ParameterMode.OUTPUT},
             )
         )
 
-    def process(self) -> None:
-        image = self.get_parameter_value("image")
-        tag = self.get_parameter_value("tag") or ""
+    def _measure_aspect_ratio(self, image: Any) -> float | None:
+        """Return the image's aspect ratio, or None when it cannot be measured.
 
-        logger.info(f"CreateReferenceImage processing: image={type(image).__name__ if image else 'None'}, tag='{tag}'")
+        Measuring is a courtesy check so an unusable reference is caught before a generation
+        is paid for. Failing to measure is not itself a reason to reject the image.
+        """
+        # `File` handles an artifact's value, a bare path, and a `{inputs}/...` macro alike, so
+        # every shape the parameter declares is measurable -- not just `ImageUrlArtifact`.
+        source = getattr(image, "value", image)
+        try:
+            image_bytes = File(str(source)).read_bytes()
+            with Image.open(io.BytesIO(image_bytes)) as img:
+                return img.width / img.height
+        except (FileLoadError, OSError, ValueError, ZeroDivisionError) as e:
+            logger.debug("%s: could not measure aspect ratio: %s", self.name, e)
+            return None
+
+    async def aprocess(self) -> None:
+        image = self.get_parameter_value("image")
+        tag = str(self.get_parameter_value("tag") or "").strip()
 
         if not image:
-            logger.warning("CreateReferenceImage: No image provided, returning None")
-            self.parameter_output_values["reference_image"] = None
-            return
+            msg = (
+                f"Attempted to create a reference image on '{self.name}'. Failed because no image is set. "
+                "Connect an image or choose a file."
+            )
+            raise ValueError(msg)
 
-        # Note: ImageUrlArtifact doesn't have ratio attribute, so we skip ratio validation
-        # If ratio validation is needed, the image would need to be downloaded and analyzed
-        if isinstance(image, ImageUrlArtifact):
-            logger.info("CreateReferenceImage: Downloading and analyzing ImageUrlArtifact for aspect ratio validation")
-
-            # Download and analyze the image
-            try:
-                image_bytes = File(image.value).read_bytes()
-
-                image_data = io.BytesIO(image_bytes)
-                img = Image.open(image_data)
-                aspect_ratio = img.width / img.height
-
-                logger.info(
-                    f"CreateReferenceImage: Image dimensions: {img.width}x{img.height}, aspect ratio: {aspect_ratio:.2f}"
-                )
-
-                if not 0.5 <= aspect_ratio <= 2.0:
-                    logger.warning(
-                        f"CreateReferenceImage: Image aspect ratio {aspect_ratio:.2f} is outside valid range (0.5-2.0)"
-                    )
-                    self.parameter_output_values["reference_image"] = None
-                    return
-
-            except (FileLoadError, Exception) as e:
-                logger.warning(f"CreateReferenceImage: Failed to download/analyze image: {e}")
-                # Continue without validation rather than failing completely
-
-        elif isinstance(image, dict) and "meta" in image and "aspectRatio" in image["meta"]:
-            # Handle dict format with meta information
-            aspect_ratio = image["meta"]["aspectRatio"]
-            logger.info(f"CreateReferenceImage: Using provided aspect ratio: {aspect_ratio}")
-
-            if not 0.5 <= aspect_ratio <= 2.0:
-                logger.warning(
-                    f"CreateReferenceImage: Image aspect ratio {aspect_ratio} is outside valid range (0.5-2.0)"
-                )
-                self.parameter_output_values["reference_image"] = None
-                return
+        aspect_ratio = None
+        if isinstance(image, dict):
+            # `meta` can be present but null, and `aspectRatio` can be a string, so neither
+            # is trusted to be a usable number.
+            meta = image.get("meta")
+            candidate = meta.get("aspectRatio") if isinstance(meta, dict) else None
+            aspect_ratio = candidate if isinstance(candidate, (int, float)) else None
         else:
-            logger.info("CreateReferenceImage: Unsupported image type, cannot validate aspect ratio")
-            self.parameter_output_values["reference_image"] = None
-            return
+            # Off the loop: measuring downloads the image and PIL-decodes it, and the engine
+            # runs a node's coroutine on its shared event loop.
+            aspect_ratio = await asyncio.to_thread(self._measure_aspect_ratio, image)
 
-        # Generate default tag if empty
-        if not tag.strip():
-            # Use a simple counter-based default tag
-            import time
+        # An out-of-range reference is rejected outright rather than passed on, because
+        # RunwayML refuses it and the resulting error names the generation node instead of
+        # the image that caused it.
+        if aspect_ratio is not None and not MIN_REFERENCE_ASPECT_RATIO <= aspect_ratio <= MAX_REFERENCE_ASPECT_RATIO:
+            msg = (
+                f"Attempted to create a reference image on '{self.name}'. Failed because its aspect ratio "
+                f"is {aspect_ratio:.2f}, outside the {MIN_REFERENCE_ASPECT_RATIO}-{MAX_REFERENCE_ASPECT_RATIO} "
+                "range RunwayML accepts. Crop the image to something closer to square."
+            )
+            raise ValueError(msg)
 
-            timestamp = str(int(time.time() * 1000))[-6:]  # Last 6 digits of timestamp
-            tag = f"image_{timestamp}"
-            logger.info(f"CreateReferenceImage: Generated default tag '{tag}' for empty tag input")
+        if not tag:
+            # A digest, not `hash()`: str hashing is salted per interpreter, so a hash-derived
+            # tag changes on every engine restart and a prompt written against it silently
+            # stops matching. Tags must also start with a letter, hence the prefix.
+            digest = hashlib.sha256(self.name.encode("utf-8")).hexdigest()[:8]
+            tag = f"ref_{digest}"
+            logger.info("%s: no tag given, using '%s'", self.name, tag)
 
-        # Create the reference image artifact
-        reference_image = ReferenceImageArtifact(image=image, tag=tag.strip(), name=f"reference_{tag.strip()}")
-
-        logger.info(f"CreateReferenceImage: Created ReferenceImageArtifact with tag '{tag.strip()}'")
-        self.parameter_output_values["reference_image"] = reference_image
+        self.parameter_output_values["reference_image"] = ReferenceImageArtifact(
+            image=image, tag=tag, name=f"reference_{tag}"
+        )

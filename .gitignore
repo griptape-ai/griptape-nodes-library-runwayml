@@ -1,4 +1,5 @@
 .env
 .venv
-example_nodes_template/__pycache__/
-/runwayml/__pycache__
+__pycache__/
+.pytest_cache/
+.ruff_cache/
