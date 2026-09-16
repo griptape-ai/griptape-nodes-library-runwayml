@@ -5,7 +5,6 @@ from api_surface import (
     PRORES_OUTPUT_FORMATS,
     get_model,
     model_choices,
-    prores_profiles_for,
     single_file_output_formats,
 )
 from griptape.artifacts import VideoUrlArtifact
@@ -167,33 +166,13 @@ class RunwayML_VideoToHDR(RunwayTaskNode):
             )
             raise ValueError(msg)
 
-        output_format = str(self.get_parameter_value("output_format") or DEFAULT_OUTPUT_FORMAT)
-        # `output_format` accepts a connection, so the dropdown's frame-sequence filter is not a
-        # gate on its own. Saving a zip of frames as a video is worse than refusing it.
-        deliverable = single_file_output_formats(get_model(model_name, ENDPOINT_VIDEO_TO_HDR).output_formats)
-        if output_format not in deliverable:
-            msg = (
-                f"Attempted to convert a video to HDR on '{self.name}' as '{output_format}'. Failed "
-                f"because it is not a format this node can save. It supports: {', '.join(deliverable)}."
-            )
-            raise ValueError(msg)
-
-        payload: dict[str, Any] = {
-            "model": model_name,
-            "videoUri": video_uri,
-            "outputFormat": output_format,
-        }
-
-        if output_format in PRORES_OUTPUT_FORMATS:
-            profile = str(self.get_parameter_value("prores_profile") or DEFAULT_PRORES_PROFILE)
-            allowed = prores_profiles_for(output_format, get_model(model_name, ENDPOINT_VIDEO_TO_HDR).prores_profiles)
-            if profile not in allowed:
-                msg = (
-                    f"Attempted to deliver '{output_format}' from '{self.name}' as ProRes {profile}. "
-                    f"Failed because that container serves only: {', '.join(allowed)}."
-                )
-                raise ValueError(msg)
-            payload["proresProfile"] = profile
+        payload: dict[str, Any] = {"model": model_name, "videoUri": video_uri}
+        self._attach_output_format(
+            payload,
+            get_model(model_name, ENDPOINT_VIDEO_TO_HDR),
+            default_format=DEFAULT_OUTPUT_FORMAT,
+            always_send=True,
+        )
 
         return payload
 

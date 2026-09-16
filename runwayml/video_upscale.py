@@ -162,6 +162,11 @@ class RunwayML_VideoUpscale(RunwayTaskNode):
                 )
             )
 
+        try:
+            get_model(str(self.get_parameter_value("model") or ""), ENDPOINT_VIDEO_UPSCALE)
+        except ValueError as e:
+            errors.append(e)
+
         return errors or None
 
     def build_payload(self) -> dict[str, Any]:

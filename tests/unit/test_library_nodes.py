@@ -135,6 +135,24 @@ class TestNewNodePayloads:
         assert any("no input video is set" in str(e) for e in errors)
 
 
+@pytest.mark.parametrize("entry", NODE_ENTRIES, ids=lambda e: e["class_name"])
+def test_every_task_node_rejects_a_retired_model_in_the_editor(entry: dict[str, Any]) -> None:
+    """A stale model must be caught before the run, not after it starts.
+
+    `Options` snaps a stale property to choices[0], but `model` accepts an incoming connection
+    that bypasses the trait, so the validation hook is the real gate.
+    """
+    node = build_node(entry)
+    if not isinstance(node, RunwayTaskNode):
+        pytest.skip("not a task node")
+
+    node.parameter_values["model"] = "gen4_aleph"
+    errors = node.validate_before_node_run() or []
+    assert any("gen4_aleph" in str(e) for e in errors), (
+        f"{entry['class_name']} does not validate its model at editor time"
+    )
+
+
 class TestPayloadFieldsAreDeclared:
     """`api_surface.payload_fields` is what the drift check compares against the live spec.
 

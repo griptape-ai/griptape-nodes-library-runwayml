@@ -90,6 +90,23 @@ def test_containers_runway_accepts_are_not_recompressed(node: RunwayML_VideoToVi
     assert base64.b64encode(b"RAW").decode() in result
 
 
+@pytest.mark.parametrize("source", ["/Volumes/inputs/take_01", "http://host/download?id=5"])
+def test_an_unidentifiable_container_is_normalized_not_assumed_to_be_mp4(
+    node: RunwayML_VideoToVideo, source: str
+) -> None:
+    """`guess_type` returns None here; defaulting that to mp4 would skip the transcode."""
+    _set_minimal_required(node)
+
+    with (
+        patch("video_to_video.File") as MockFile,
+        patch.object(RunwayML_VideoToVideo, "_transcode_video_file", return_value=None) as mock_transcode,
+    ):
+        MockFile.return_value.read_bytes.return_value = b"RAW"
+        node._read_to_data_uri(source)
+
+    mock_transcode.assert_called_once()
+
+
 def test_a_container_runway_rejects_is_normalized(node: RunwayML_VideoToVideo) -> None:
     _set_minimal_required(node)
 

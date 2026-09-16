@@ -3,11 +3,8 @@ from typing import Any
 from api_surface import (
     ENDPOINT_TEXT_TO_VIDEO,
     MAX_PROMPT_LENGTH,
-    PRORES_OUTPUT_FORMATS,
     get_model,
     model_choices,
-    prompt_length,
-    prores_profiles_for,
     single_file_output_formats,
 )
 from griptape.artifacts import VideoUrlArtifact
@@ -142,13 +139,6 @@ class RunwayML_TextToVideo(RunwayTaskNode):
             errors.append(
                 ValueError(f"Attempted to generate a video on '{self.name}'. Failed because the prompt is empty.")
             )
-        elif prompt_length(prompt) > MAX_PROMPT_LENGTH:
-            errors.append(
-                ValueError(
-                    f"Attempted to generate a video on '{self.name}'. Failed because the prompt is "
-                    f"{prompt_length(prompt)} characters and RunwayML allows at most {MAX_PROMPT_LENGTH}."
-                )
-            )
 
         try:
             get_model(str(self.get_parameter_value("model") or ""), ENDPOINT_TEXT_TO_VIDEO)
@@ -170,30 +160,9 @@ class RunwayML_TextToVideo(RunwayTaskNode):
             "contentModeration": self._content_moderation(),
         }
 
-        output_format = str(self.get_parameter_value("output_format") or DEFAULT_OUTPUT_FORMAT)
-        if output_format != DEFAULT_OUTPUT_FORMAT:
-            # `output_format` accepts a connection, so the dropdown's frame-sequence filter is
-            # not a gate on its own. Saving a zip of frames as a video is worse than refusing it.
-            deliverable = single_file_output_formats(get_model(model_name, ENDPOINT_TEXT_TO_VIDEO).output_formats)
-            if output_format not in deliverable:
-                msg = (
-                    f"Attempted to generate a video on '{self.name}' as '{output_format}'. Failed "
-                    f"because {model_name} cannot deliver that format. It supports: {', '.join(deliverable)}."
-                )
-                raise ValueError(msg)
-
-            payload["outputFormat"] = output_format
-            if output_format in PRORES_OUTPUT_FORMATS:
-                spec = get_model(model_name, ENDPOINT_TEXT_TO_VIDEO)
-                profile = str(self.get_parameter_value("prores_profile") or DEFAULT_PRORES_PROFILE)
-                allowed = prores_profiles_for(output_format, spec.prores_profiles)
-                if profile not in allowed:
-                    msg = (
-                        f"Attempted to deliver '{output_format}' from '{self.name}' as ProRes {profile}. "
-                        f"Failed because that container serves only: {', '.join(allowed)}."
-                    )
-                    raise ValueError(msg)
-                payload["proresProfile"] = profile
+        self._attach_output_format(
+            payload, get_model(model_name, ENDPOINT_TEXT_TO_VIDEO), default_format=DEFAULT_OUTPUT_FORMAT
+        )
 
         return payload
 

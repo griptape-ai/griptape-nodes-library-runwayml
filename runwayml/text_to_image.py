@@ -8,7 +8,6 @@ from api_surface import (
     MAX_PROMPT_LENGTH,
     get_model,
     model_choices,
-    prompt_length,
 )
 from artifacts import ReferenceImageArtifact, unpack_reference_image
 from griptape.artifacts import ImageUrlArtifact
@@ -187,19 +186,15 @@ class RunwayML_TextToImage(RunwayTaskNode):
     def _build_reference_images(self) -> list[dict[str, str]]:
         """Resolve every connected reference image into RunwayML's payload shape.
 
-        Raises:
-            ValueError: If a reference image is unusable or too many are connected.
-        """
-        connected = self.get_parameter_list_value("reference_images") or []
-        if len(connected) > self._max_reference_images:
-            msg = (
-                f"Attempted to generate an image on '{self.name}' with {len(connected)} reference images. "
-                f"RunwayML accepts at most {self._max_reference_images}."
-            )
-            raise ValueError(msg)
+        The count is not capped and the tags are not checked: RunwayML enforces both, rejects
+        before billing, and names the offending field. A local copy of either rule would start
+        refusing valid requests the moment RunwayML relaxed it.
 
+        Raises:
+            ValueError: If a reference image cannot be read or converted.
+        """
         references = []
-        for index, candidate in enumerate(connected):
+        for index, candidate in enumerate(self.get_parameter_list_value("reference_images") or []):
             image, tag = unpack_reference_image(candidate)
             if image is None:
                 msg = (
@@ -208,8 +203,8 @@ class RunwayML_TextToImage(RunwayTaskNode):
                 )
                 raise ValueError(msg)
 
-            # A tag is what makes the image addressable as @tag in the prompt, so an
-            # untagged image still needs one to be usable at all.
+            # A tag is what makes the image addressable as @tag in the prompt, so an untagged
+            # image still needs one to be usable at all.
             references.append({"uri": self._resolve_reference_image(image), "tag": tag or f"ref_{index + 1}"})
 
         return references
@@ -217,17 +212,9 @@ class RunwayML_TextToImage(RunwayTaskNode):
     def validate_before_node_run(self) -> list[Exception] | None:
         errors = super().validate_before_node_run() or []
 
-        prompt = str(self.get_parameter_value("prompt_text") or "").strip()
-        if not prompt:
+        if not str(self.get_parameter_value("prompt_text") or "").strip():
             errors.append(
                 ValueError(f"Attempted to generate an image on '{self.name}'. Failed because the prompt is empty.")
-            )
-        elif prompt_length(prompt) > MAX_PROMPT_LENGTH:
-            errors.append(
-                ValueError(
-                    f"Attempted to generate an image on '{self.name}'. Failed because the prompt is "
-                    f"{prompt_length(prompt)} characters and RunwayML allows at most {MAX_PROMPT_LENGTH}."
-                )
             )
 
         model_name = str(self.get_parameter_value("model") or DEFAULT_MODEL)
@@ -239,17 +226,7 @@ class RunwayML_TextToImage(RunwayTaskNode):
 
         # Counted, not resolved: the engine calls this synchronously on its event loop, and
         # resolving here would PIL-decode and base64 every reference image before the run.
-        # `build_payload` runs in a thread and reports an unusable image from there.
-        connected = self.get_parameter_list_value("reference_images") or []
-        if len(connected) > self._max_reference_images:
-            errors.append(
-                ValueError(
-                    f"Attempted to generate an image on '{self.name}' with {len(connected)} reference images. "
-                    f"RunwayML accepts at most {self._max_reference_images}."
-                )
-            )
-
-        if "referenceImages" in spec.required_fields and not connected:
+        if "referenceImages" in spec.required_fields and not (self.get_parameter_list_value("reference_images") or []):
             errors.append(
                 ValueError(
                     f"Attempted to generate an image on '{self.name}' with {model_name}. Failed because that "

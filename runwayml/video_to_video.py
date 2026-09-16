@@ -7,13 +7,8 @@ from typing import Any
 
 from api_surface import (
     ENDPOINT_VIDEO_TO_VIDEO,
-    MAX_PROMPT_LENGTH,
-    PRORES_OUTPUT_FORMATS,
-    ModelSpec,
     get_model,
     model_choices,
-    prompt_length,
-    prores_profiles_for,
     single_file_output_formats,
 )
 from griptape.artifacts import VideoUrlArtifact
@@ -225,12 +220,16 @@ class RunwayML_VideoToVideo(RunwayTaskNode):
         # Only re-encode a container RunwayML will not take. Transcoding unconditionally cost a
         # generation of quality on every local input, and this node can be asked to deliver
         # ProRes 4444 -- where handing the model an 8-bit 4:2:0 source defeats the request.
-        content_type = mimetypes.guess_type(source)[0] or DEFAULT_VIDEO_CONTENT_TYPE
-        if content_type in RUNWAY_ACCEPTED_VIDEO_TYPES:
-            logger.info("RunwayML V2V: %s is a format RunwayML accepts; sending it unchanged", content_type)
-            return f"data:{content_type};base64,{base64.b64encode(video_bytes).decode('utf-8')}"
+        # Only skip the transcode when the extension positively identifies an accepted
+        # container. `guess_type` returns None for an extensionless path or a query-string URL,
+        # and defaulting that to video/mp4 would send unknown bytes up mislabelled and
+        # un-normalized -- the inputs that most need the transcode.
+        guessed = mimetypes.guess_type(source)[0]
+        if guessed in RUNWAY_ACCEPTED_VIDEO_TYPES:
+            logger.info("RunwayML V2V: %s is a format RunwayML accepts; sending it unchanged", guessed)
+            return f"data:{guessed};base64,{base64.b64encode(video_bytes).decode('utf-8')}"
 
-        return self._transcode_to_data_uri(video_bytes, content_type)
+        return self._transcode_to_data_uri(video_bytes, guessed or "an unrecognized container")
 
     def _transcode_to_data_uri(self, video_bytes: bytes, content_type: str) -> str:
         """Normalize bytes RunwayML would reject into an H.264 mp4 data URI.
@@ -325,16 +324,8 @@ class RunwayML_VideoToVideo(RunwayTaskNode):
         except ValueError as e:
             errors.append(e)
 
-        # Aleph 2 treats promptText as optional, so an empty prompt is not an error here.
-        prompt = str(self.get_parameter_value("prompt") or "").strip()
-        if prompt_length(prompt) > MAX_PROMPT_LENGTH:
-            errors.append(
-                ValueError(
-                    f"Attempted to edit a video on '{self.name}'. Failed because the prompt is "
-                    f"{prompt_length(prompt)} characters and RunwayML allows at most {MAX_PROMPT_LENGTH}."
-                )
-            )
-
+        # Aleph 2 treats promptText as optional, so an empty prompt is not an error here, and
+        # prompt length is RunwayML's call rather than ours.
         return errors or None
 
     def build_payload(self) -> dict[str, Any]:
@@ -379,42 +370,8 @@ class RunwayML_VideoToVideo(RunwayTaskNode):
             # replaced it. One guidance image applies at the start of the clip.
             payload["keyframes"] = [{"uri": reference_image_uri, "seconds": KEYFRAME_START_SECONDS}]
 
-        self._attach_output_format(payload, model_name, spec)
+        self._attach_output_format(payload, spec, default_format=DEFAULT_OUTPUT_FORMAT)
         return payload
-
-    def _attach_output_format(self, payload: dict[str, Any], model_name: str, spec: ModelSpec) -> None:
-        """Attach the delivery format.
-
-        Raises:
-            ValueError: If a format is requested that this model cannot deliver. `output_format`
-                accepts an incoming connection, so a frame-sequence format can arrive here even
-                though the dropdown filters them out -- and saving a zip as a video is worse than
-                refusing it.
-        """
-        output_format = str(self.get_parameter_value("output_format") or DEFAULT_OUTPUT_FORMAT)
-        if output_format == DEFAULT_OUTPUT_FORMAT:
-            return
-
-        deliverable = single_file_output_formats(spec.output_formats)
-        if output_format not in deliverable:
-            offered = ", ".join(deliverable) if deliverable else "only mp4"
-            msg = (
-                f"Attempted to edit a video on '{self.name}' as '{output_format}'. Failed because "
-                f"{model_name} cannot deliver that format here. It supports: {offered}."
-            )
-            raise ValueError(msg)
-
-        payload["outputFormat"] = output_format
-        if output_format in PRORES_OUTPUT_FORMATS:
-            profile = str(self.get_parameter_value("prores_profile") or "4444")
-            allowed = prores_profiles_for(output_format, spec.prores_profiles)
-            if profile not in allowed:
-                msg = (
-                    f"Attempted to deliver '{output_format}' from '{self.name}' as ProRes {profile}. "
-                    f"Failed because that container serves only: {', '.join(allowed)}."
-                )
-                raise ValueError(msg)
-            payload["proresProfile"] = profile
 
     def build_artifact(self, location: str) -> VideoUrlArtifact:
         return VideoUrlArtifact(value=location, name="runwayml_video_to_video")

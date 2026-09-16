@@ -41,7 +41,9 @@ class RunwayML_CreateReferenceImage(DataNode):
                 default_value="",
                 tooltip=(
                     "The tag used to address this image from a prompt, for example 'EiffelTower' "
-                    "then '@EiffelTower' in the prompt. A tag is generated if left empty."
+                    "then '@EiffelTower' in the prompt. RunwayML requires 3-16 characters, "
+                    "starting with a letter, using only letters, digits and underscores. "
+                    "A tag is generated if left empty."
                 ),
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
                 placeholder_text="e.g., EiffelTower (optional)",

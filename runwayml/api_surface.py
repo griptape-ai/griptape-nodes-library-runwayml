@@ -69,19 +69,6 @@ PRORES_PROFILES_FULL = ("422 Proxy", "422 LT", "422", "422 HQ", "4444", "4444 XQ
 PRORES_PROFILES_HDR = ("422", "422 HQ", "4444")
 
 
-def prores_profiles_for(output_format: str, available: tuple[str, ...]) -> tuple[str, ...]:
-    """Narrow the ProRes tiers to those the chosen container actually serves.
-
-    `hdr_prores` accepts only 422, 422 HQ and 4444 -- 422 Proxy and 422 LT quantize too heavily
-    to hold HDR gradients, and 12-bit is served by `hdr_pq_12bit_master` rather than 4444 XQ.
-    The spec's `proresProfile` enum is the permissive union of both containers, so the drift
-    check cannot see this narrowing and it has to be encoded here.
-    """
-    if output_format == "hdr_prores":
-        return tuple(p for p in available if p in PRORES_PROFILES_HDR)
-    return available
-
-
 # `hdr_exr_*` and `png_sequence` deliver a zip of frames rather than a single video
 # file, so callers must branch on the container before building an output artifact.
 FRAME_SEQUENCE_OUTPUT_FORMATS = (

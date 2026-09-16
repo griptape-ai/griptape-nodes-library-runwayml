@@ -12,7 +12,14 @@ import random
 from pathlib import PurePosixPath
 from typing import Any
 
-from api_surface import OUTPUT_FORMAT_EXTENSIONS, SEED_MAX, SEED_MIN
+from api_surface import (
+    OUTPUT_FORMAT_EXTENSIONS,
+    PRORES_OUTPUT_FORMATS,
+    SEED_MAX,
+    SEED_MIN,
+    ModelSpec,
+    single_file_output_formats,
+)
 from griptape.artifacts import UrlArtifact
 from griptape_nodes.exe_types.core_types import ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
@@ -121,10 +128,61 @@ class RunwayTaskNode(SuccessFailureNode):
         property `publicFigureThreshold`, so the key name is spelled once here rather than in
         every node that sends it.
         """
-        threshold = self.get_parameter_value("content_moderation") or self.get_parameter_value(
-            "public_figure_threshold"
-        )
-        return {"publicFigureThreshold": str(threshold or "auto")}
+        # Two names because the nodes shipped with two: four call it `content_moderation` and
+        # two `public_figure_threshold`. Unifying them would reset the stored value in every
+        # saved workflow that set it, so the split is kept and resolved by which parameter the
+        # node actually declares rather than by an `or` that would silently prefer one.
+        for name in ("content_moderation", "public_figure_threshold"):
+            if self.get_parameter_by_name(name) is not None:
+                return {"publicFigureThreshold": str(self.get_parameter_value(name) or "auto")}
+
+        msg = f"Node '{self.name}' sends contentModeration but declares no moderation parameter."
+        raise ValueError(msg)
+
+    def _attach_output_format(
+        self,
+        payload: dict[str, Any],
+        spec: ModelSpec,
+        *,
+        default_format: str,
+        always_send: bool = False,
+    ) -> None:
+        """Attach `outputFormat`, and `proresProfile` when the container carries a ProRes stream.
+
+        Lives on the base because all four nodes that offer a delivery format need the same four
+        steps, and when each had its own copy they drifted -- different error wording, a redundant
+        model lookup, and the frame-sequence rejection written four times.
+
+        `always_send` is for a node whose default is not mp4 (Video-to-HDR defaults to `hdr10` and
+        has no plain-mp4 escape), so the field is never omitted.
+
+        Raises:
+            ValueError: If the requested format is not one this model can deliver as a single
+                file, or if the ProRes tier is not one the container serves. Both are rejected
+                rather than dropped: `output_format` accepts an incoming connection, so the
+                dropdown's filtering is not a gate, and silently downgrading bills the user for a
+                container they did not ask for.
+        """
+        output_format = str(self.get_parameter_value("output_format") or default_format)
+        if output_format == default_format and not always_send:
+            return
+
+        deliverable = single_file_output_formats(spec.output_formats)
+        if output_format not in deliverable:
+            offered = ", ".join(deliverable) if deliverable else "only mp4"
+            msg = (
+                f"Attempted to deliver '{output_format}' from '{self.name}'. Failed because "
+                f"{spec.model_id} cannot deliver that format. It supports: {offered}."
+            )
+            raise ValueError(msg)
+
+        payload["outputFormat"] = output_format
+        if output_format in PRORES_OUTPUT_FORMATS:
+            # Not checked against the tier the container serves. RunwayML rejects an unavailable
+            # pair itself, before billing, and naming its own constraint better than we can --
+            # and a local copy of that rule would start blocking valid requests the moment
+            # RunwayML relaxed it.
+            payload["proresProfile"] = str(self.get_parameter_value("prores_profile") or "")
 
     def _resolve_seed(self) -> int:
         """Apply `seed_control` and return the seed to send.
