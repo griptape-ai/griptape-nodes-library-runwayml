@@ -158,10 +158,10 @@ class RunwayTaskNode(SuccessFailureNode):
 
         Raises:
             ValueError: If the requested format is not one this model can deliver as a single
-                file, or if the ProRes tier is not one the container serves. Both are rejected
-                rather than dropped: `output_format` accepts an incoming connection, so the
-                dropdown's filtering is not a gate, and silently downgrading bills the user for a
-                container they did not ask for.
+                file. This one check stays local because it is a limit of this library rather
+                than of the API -- RunwayML will happily return a zip of frames, and saving that
+                as a video is worse than refusing it. `output_format` accepts an incoming
+                connection, so the dropdown's filtering is not a gate on its own.
         """
         output_format = str(self.get_parameter_value("output_format") or default_format)
         if output_format == default_format and not always_send:
@@ -179,10 +179,14 @@ class RunwayTaskNode(SuccessFailureNode):
         payload["outputFormat"] = output_format
         if output_format in PRORES_OUTPUT_FORMATS:
             # Not checked against the tier the container serves. RunwayML rejects an unavailable
-            # pair itself, before billing, and naming its own constraint better than we can --
-            # and a local copy of that rule would start blocking valid requests the moment
-            # RunwayML relaxed it.
-            payload["proresProfile"] = str(self.get_parameter_value("prores_profile") or "")
+            # pair itself, before billing, and names its own constraint better than we can -- and
+            # a local copy of that rule would start blocking valid requests the moment RunwayML
+            # relaxed it. Omitted when empty rather than sent blank: `proresProfile` is optional
+            # upstream and RunwayML picks a tier when it is absent, so sending "" would
+            # manufacture a rejection that omitting the key avoids.
+            profile = str(self.get_parameter_value("prores_profile") or "")
+            if profile:
+                payload["proresProfile"] = profile
 
     def _resolve_seed(self) -> int:
         """Apply `seed_control` and return the seed to send.

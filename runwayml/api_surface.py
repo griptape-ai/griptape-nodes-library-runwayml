@@ -25,18 +25,10 @@ RUNWAY_API_BASE = "https://api.dev.runwayml.com/v1"
 # still publishes, so it is verified against the spec's `info.version` by the drift check.
 RUNWAY_API_VERSION = "2024-11-06"
 
-# Applies to every endpoint that accepts a prompt, measured in UTF-16 code units.
+# Applies to every endpoint that accepts a prompt. RunwayML counts UTF-16 code units, so a
+# prompt outside the BMP reaches the limit sooner than `len()` suggests -- it is RunwayML's
+# check to make, and this value is here for the tooltips and the drift check.
 MAX_PROMPT_LENGTH = 1000
-
-
-def prompt_length(prompt: str) -> int:
-    """Measure a prompt the way Runway measures it.
-
-    Runway counts UTF-16 code units, so `len()` under-counts anything outside the BMP. An
-    emoji-heavy prompt would pass a `len()` check and then come back as a raw 400, which is
-    exactly what a local pre-check exists to prevent.
-    """
-    return len(prompt.encode("utf-16-le")) // 2
 
 
 # Runway rejects an inlined data URI above this size. The limit applies to the encoded

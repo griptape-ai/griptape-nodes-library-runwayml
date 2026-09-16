@@ -231,6 +231,54 @@ class TestPayloadFieldsAreDeclared:
         assert payload["keyframes"] == [{"uri": "data:image/png;base64,AAAA", "seconds": 0}]
 
 
+class TestProResProfileIsOmittedWhenEmpty:
+    """`proresProfile` is optional upstream; sending "" manufactures a rejection.
+
+    Reachable because `prores_profile` declares ParameterMode.INPUT, so a connection can feed
+    an empty string even though the declared default is a valid tier.
+    """
+
+    @pytest.mark.parametrize(
+        ("module_name", "class_name", "values"),
+        [
+            ("text_to_video", "RunwayML_TextToVideo", {"prompt": "x", "output_format": "prores"}),
+            (
+                "video_to_video",
+                "RunwayML_VideoToVideo",
+                {"video": "https://e.com/v.mp4", "output_format": "prores"},
+            ),
+            (
+                "video_to_hdr",
+                "RunwayML_VideoToHDR",
+                {"video": "https://e.com/v.mp4", "output_format": "hdr_prores"},
+            ),
+        ],
+    )
+    def test_an_empty_tier_omits_the_key(self, module_name: str, class_name: str, values: dict[str, Any]) -> None:
+        module = importlib.import_module(module_name)
+        with patch("runway_node.get_api_key", return_value="k"):
+            node = getattr(module, class_name)(name="n")
+        for name, value in values.items():
+            node.set_parameter_value(name, value)
+        node.parameter_values["prores_profile"] = ""
+
+        payload = node.build_payload()
+        assert payload["outputFormat"] == values["output_format"]
+        assert "proresProfile" not in payload
+
+    def test_a_chosen_tier_is_sent_verbatim(self) -> None:
+        """Whatever the user picked goes through unjudged; RunwayML rules on the pairing."""
+        from text_to_video import RunwayML_TextToVideo
+
+        with patch("runway_node.get_api_key", return_value="k"):
+            node = RunwayML_TextToVideo(name="t2v")
+        node.set_parameter_value("prompt", "x")
+        node.set_parameter_value("output_format", "prores")
+        node.set_parameter_value("prores_profile", "422 Proxy")
+
+        assert node.build_payload()["proresProfile"] == "422 Proxy"
+
+
 class TestProOutputIsResetWhenUnavailable:
     def test_switching_off_a_pro_model_clears_a_stale_output_format(self) -> None:
         """Left stale, `prores` is dropped from the payload and the user is billed for mp4."""
