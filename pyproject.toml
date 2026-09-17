@@ -8,6 +8,8 @@ authors = [
 readme = "README.md"
 requires-python = "~=3.12.0"
 dependencies = [
+    "httpx",
+    "pillow",
 ]
 
 [tool.uv.sources]
@@ -31,7 +33,7 @@ dev = ["pyright>=1.1.396", "pytest-asyncio>=0.21.0", "ruff>=0.8.0", "pytest", "g
 # directory containing ``griptape_nodes_library.json``), so node modules import
 # siblings as top-level packages (``from media import ...``). Mirror that here
 # so tests resolve the same modules the running engine does.
-pythonpath = ["runwayml"]
+pythonpath = ["runwayml", "scripts"]
 
 [tool.ruff]
 line-length = 120
@@ -67,8 +69,3 @@ pythonVersion = "3.12"
 reportIncompatibleMethodOverride = false
 reportMissingImports = false
 reportMissingModuleSource = false
-reportAttributeAccessIssue = false
-reportReturnType = false
-reportArgumentType = false
-reportCallIssue = false
-reportPossiblyUnboundVariable = false

@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Tests for the shared media coercion helpers.
 
 Mirrors ``tests/unit/media/test_coercion.py`` in the standard library so
@@ -10,8 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from act_two import VideoUrlArtifact
-from griptape.artifacts import ImageUrlArtifact
+from griptape.artifacts import ImageUrlArtifact, VideoUrlArtifact
 from media import (
     DEFAULT_PASS_THROUGH_SCHEMES,
     coerce_media_url_or_data_uri,
