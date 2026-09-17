@@ -76,7 +76,9 @@ class RunwayML_VideoToVideo(RunwayTaskNode):
                     "Text prompt describing the desired edit. Optional: an edit can also be driven "
                     "by a reference image or a target aspect ratio alone."
                 ),
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+                # OUTPUT as well as INPUT so the prompt can travel with the result: an asset
+                # manager publishing the output wants the prompt that produced it.
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY, ParameterMode.OUTPUT},
                 multiline=True,
                 placeholder_text="e.g., make it look like a rainy night",
             )
@@ -87,7 +89,8 @@ class RunwayML_VideoToVideo(RunwayTaskNode):
                 input_types=["ImageArtifact", "ImageUrlArtifact", "str"],
                 type="ImageArtifact",
                 tooltip=("Optional guidance image applied at the start of the clip. JPEG, PNG, or WebP only."),
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+                # OUTPUT as well as INPUT, for the same provenance reason as `prompt`.
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY, ParameterMode.OUTPUT},
                 ui_options={"clickable_file_browser": True},
             )
         )

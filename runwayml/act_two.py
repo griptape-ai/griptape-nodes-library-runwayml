@@ -49,7 +49,8 @@ class RunwayML_ActTwo(RunwayTaskNode):
                 input_types=["ImageArtifact", "ImageUrlArtifact", "str"],
                 type="ImageUrlArtifact",
                 tooltip="Still image of the character to animate.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+                # OUTPUT as well as INPUT so the character can be passed on for provenance.
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY, ParameterMode.OUTPUT},
                 ui_options={"clickable_file_browser": True},
             )
         )

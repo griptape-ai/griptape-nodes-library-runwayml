@@ -231,6 +231,31 @@ class TestPayloadFieldsAreDeclared:
         assert payload["keyframes"] == [{"uri": "data:image/png;base64,AAAA", "seconds": 0}]
 
 
+@pytest.mark.parametrize(
+    ("module_name", "class_name", "param"),
+    [
+        ("act_two", "RunwayML_ActTwo", "character_image"),
+        ("video_to_video", "RunwayML_VideoToVideo", "prompt"),
+        ("video_to_video", "RunwayML_VideoToVideo", "reference_image"),
+    ],
+)
+def test_pass_through_inputs_keep_their_output_mode(module_name: str, class_name: str, param: str) -> None:
+    """These carry OUTPUT so the input can travel with the result.
+
+    Publishing a generation to an asset manager wants the prompt and reference that produced it,
+    and an earlier pass of this refactor dropped OUTPUT from all three without noticing.
+    """
+    from griptape_nodes.exe_types.core_types import ParameterMode
+
+    module = importlib.import_module(module_name)
+    with patch("runway_node.get_api_key", return_value="k"):
+        node = getattr(module, class_name)(name="n")
+
+    parameter = node.get_parameter_by_name(param)
+    assert parameter is not None
+    assert ParameterMode.OUTPUT in parameter.allowed_modes
+
+
 class TestProResProfileIsOmittedWhenEmpty:
     """`proresProfile` is optional upstream; sending "" manufactures a rejection.
 
