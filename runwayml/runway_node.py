@@ -128,10 +128,9 @@ class RunwayTaskNode(SuccessFailureNode):
         property `publicFigureThreshold`, so the key name is spelled once here rather than in
         every node that sends it.
         """
-        # Two names because the nodes shipped with two: four call it `content_moderation` and
-        # two `public_figure_threshold`. Unifying them would reset the stored value in every
-        # saved workflow that set it, so the split is kept and resolved by which parameter the
-        # node actually declares rather than by an `or` that would silently prefer one.
+        # The nodes shipped with two names for this control, and settling on one would reset the
+        # stored value in every saved workflow that set it. Resolved by which parameter the node
+        # declares, not by an `or` that would silently prefer one.
         for name in ("content_moderation", "public_figure_threshold"):
             if self.get_parameter_by_name(name) is not None:
                 return {"publicFigureThreshold": str(self.get_parameter_value(name) or "auto")}
