@@ -4,9 +4,9 @@ The offline suite proves the payloads match the published spec; it cannot prove 
 accepts them. This script closes that gap, in three tiers so credits are only spent
 deliberately:
 
-    uv run python scripts/live_smoke.py             # tier 1: free
-    uv run python scripts/live_smoke.py --probe      # tier 2: minimal spend
-    uv run python scripts/live_smoke.py --full       # tier 3: one full generation
+    uv run python scripts/live_smoke.py                    # tier 1: always free
+    uv run python scripts/live_smoke.py --probe [--yes]     # tier 2: payload acceptance
+    uv run python scripts/live_smoke.py --full [--yes]      # tier 3: one full generation
 
 Tier 1 (free) calls `GET /v1/organization`: confirms the key works, the
 `X-Runway-Version` header is accepted, and every model this library offers is actually
@@ -17,8 +17,11 @@ Tier 2 checks that RunwayML accepts the payloads the nodes build. RunwayML valid
 request body *before* checking the credit balance, and the two failures are distinguishable
 by message ("Validation of body failed" with a field-level `issues` array, versus "You do
 not have enough credits to run this task"). So on an account with no credits this tier is
-free and still conclusive: reaching the credit error means the payload is valid. With
-credits available it submits and cancels immediately instead.
+free and still conclusive: reaching the credit error means the payload is valid.
+
+That property disappears once the account is funded -- the same call then starts a real job,
+which the script submits and cancels immediately. So --probe and --full require `--yes` when
+the balance is non-zero, because the tier that used to cost nothing now does.
 
 Note that RunwayML fetches and inspects input media during validation, so a bad or too-short
 asset is reported here as a field error rather than at generation time.
@@ -109,7 +112,12 @@ def call(method: str, path: str, api_key: str, payload: dict[str, Any] | None = 
             return e.code, body
 
 
-def tier1_preflight(api_key: str) -> bool:
+def tier1_preflight(api_key: str) -> int | None:
+    """Check the key, the API version, and model availability.
+
+    Returns the credit balance, or None when the check failed. The balance is what decides
+    whether the later tiers are free or billable.
+    """
     print("=" * 72)
     print("TIER 1  authentication, API version, and tier model availability (free)")
     print("=" * 72)
@@ -117,7 +125,7 @@ def tier1_preflight(api_key: str) -> bool:
     status, body = call("GET", "/organization", api_key)
     if status != 200:
         print(f"  FAIL  GET /v1/organization returned {status}: {body}")
-        return False
+        return None
 
     print(f"  OK    key accepted, X-Runway-Version {RUNWAY_API_VERSION} accepted")
 
@@ -129,17 +137,17 @@ def tier1_preflight(api_key: str) -> bool:
     available = set(tier.get("models", {}) or {})
     if not available:
         print("  WARN  the response carried no tier model list; skipping the availability check")
-        return True
+        return int(credits or 0)
 
     offered = {spec.model_id for spec in MODELS}
     missing = sorted(offered - available)
     print(f"  INFO  {len(available)} models enabled for this account")
     if missing:
         print(f"  FAIL  this library offers models the account cannot use: {missing}")
-        return False
+        return None
 
     print(f"  OK    all {len(offered)} models this library offers are enabled")
-    return True
+    return int(credits or 0)
 
 
 def tiny_png_data_uri() -> str:
@@ -340,13 +348,30 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probe", action="store_true", help="also submit and cancel one job per endpoint")
     parser.add_argument("--full", action="store_true", help="also run one text-to-image job to completion")
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="confirm spending credits; required for --probe or --full on a funded account",
+    )
     args = parser.parse_args()
 
     api_key = load_api_key()
 
-    if not tier1_preflight(api_key):
-        print("\nTier 1 failed; not spending credits on later tiers.", file=sys.stderr)
+    balance = tier1_preflight(api_key)
+    if balance is None:
+        print("\nTier 1 failed; not running the later tiers.", file=sys.stderr)
         return 1
+
+    # On an empty account RunwayML rejects for lack of credits *after* validating the body, so
+    # --probe is free and still conclusive. Once funded, the same call starts a real job.
+    if (args.probe or args.full) and balance > 0 and not args.yes:
+        print(
+            f"\nThis account has {balance} credits, so --probe and --full submit real jobs and "
+            "spend them.\n--probe was only free while the balance was zero. Re-run with --yes to "
+            "go ahead.",
+            file=sys.stderr,
+        )
+        return 2
 
     ok = True
     if args.probe or args.full:
