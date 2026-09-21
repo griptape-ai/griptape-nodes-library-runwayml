@@ -21,7 +21,7 @@ free and still conclusive: reaching the credit error means the payload is valid.
 
 That property disappears once the account is funded -- the same call then starts a real job,
 which the script submits and cancels immediately. So --probe and --full require `--yes` when
-the balance is non-zero, because the tier that used to cost nothing now does.
+the balance is non-zero.
 
 Note that RunwayML fetches and inspects input media during validation, so a bad or too-short
 asset is reported here as a field error rather than at generation time.

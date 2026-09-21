@@ -228,8 +228,8 @@ class RunwayClient:
         consecutive_errors = 0
         try:
             for attempt in range(MAX_POLL_ATTEMPTS):
-                # Poll before sleeping: a cached or fast result should not be held back by a
-                # fixed delay, which previously cost every job a full interval.
+                # Poll before sleeping, so a result that is already ready is not held back by a
+                # full interval.
                 try:
                     task = await self._get_task(task_id)
                 except RunwayRequestError as e:

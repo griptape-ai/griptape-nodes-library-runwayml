@@ -164,9 +164,13 @@ class RunwayML_VideoToVideo(RunwayTaskNode):
         self._add_output_file_parameter()
         self._create_status_parameters(result_details_placeholder="Generation progress will appear here.")
 
+        self._sync_prores_visibility(DEFAULT_OUTPUT_FORMAT)
+
     def after_value_set(self, parameter: Parameter, value: Any) -> None:
         if parameter.name == "output_format":
-            self._sync_output_extension(str(value or DEFAULT_OUTPUT_FORMAT))
+            output_format = str(value or DEFAULT_OUTPUT_FORMAT)
+            self._sync_output_extension(output_format)
+            self._sync_prores_visibility(output_format)
 
         return super().after_value_set(parameter, value)
 

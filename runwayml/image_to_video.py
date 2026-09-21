@@ -153,7 +153,9 @@ class RunwayML_ImageToVideo(RunwayTaskNode):
         if parameter.name == "model":
             self._sync_model_dependent_parameters(str(value or DEFAULT_MODEL))
         elif parameter.name == "output_format":
-            self._sync_output_extension(str(value or DEFAULT_OUTPUT_FORMAT))
+            output_format = str(value or DEFAULT_OUTPUT_FORMAT)
+            self._sync_output_extension(output_format)
+            self._sync_prores_visibility(output_format)
 
         return super().after_value_set(parameter, value)
 

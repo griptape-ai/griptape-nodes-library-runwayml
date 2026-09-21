@@ -139,6 +139,17 @@ class RunwayTaskNode(SuccessFailureNode):
         msg = f"Node '{self.name}' sends contentModeration but declares no moderation parameter."
         raise ValueError(msg)
 
+    def _sync_prores_visibility(self, output_format: str) -> None:
+        """Show the ProRes tier only when the chosen container carries a ProRes stream.
+
+        `proresProfile` is ignored by RunwayML for every other container, so leaving the control
+        visible offers a setting that cannot do anything.
+        """
+        if output_format in PRORES_OUTPUT_FORMATS:
+            self.show_parameter_by_name("prores_profile")
+        else:
+            self.hide_parameter_by_name("prores_profile")
+
     def _attach_output_format(
         self,
         payload: dict[str, Any],
@@ -293,15 +304,21 @@ class RunwayTaskNode(SuccessFailureNode):
                     on_status=lambda status: self.append_value_to_parameter("result_details", f"{status}\n"),
                 )
 
+            if len(urls) > 1:
+                logger.warning(
+                    "%s: RunwayML returned %d outputs for task %s; saving the first and ignoring the rest",
+                    self.name,
+                    len(urls),
+                    task_id,
+                )
             artifact = await self._save_output(urls[0])
             self.parameter_output_values[output_param] = artifact
             self.publish_update_to_parameter(output_param, artifact)
             self._set_status_results(was_successful=True, result_details=f"Saved output to {artifact.value}")
 
         except (RunwayError, ValueError, OSError, FileLoadError, FileWriteError) as e:
-            # The output parameter is left untouched on failure. Publishing an ErrorArtifact
-            # into a parameter typed as media used to hand downstream nodes an error object
-            # dressed as a video; the Failed control output is how a failure travels now.
+            # The output parameter is left untouched on failure: a media-typed parameter must
+            # never carry an error object. Failures travel down the Failed control output.
             self._set_status_results(was_successful=False, result_details=str(e))
             self._handle_failure_exception(e)
 

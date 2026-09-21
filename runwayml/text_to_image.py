@@ -3,6 +3,7 @@ import io
 from typing import Any
 
 from api_surface import (
+    DEFAULT_MAX_REFERENCE_IMAGES,
     ENDPOINT_TEXT_TO_IMAGE,
     MAX_DATA_URI_BYTES,
     MAX_PROMPT_LENGTH,
@@ -41,7 +42,7 @@ class RunwayML_TextToImage(RunwayTaskNode):
         self.description = "Generates images from text prompts with optional reference images using RunwayML."
 
         default_spec = get_model(DEFAULT_MODEL, ENDPOINT_TEXT_TO_IMAGE)
-        self._max_reference_images = default_spec.max_reference_images or 3
+        max_reference_images = default_spec.max_reference_images or DEFAULT_MAX_REFERENCE_IMAGES
 
         with ParameterGroup(name="Prompt") as prompt_group:
             ParameterString(
@@ -66,7 +67,7 @@ class RunwayML_TextToImage(RunwayTaskNode):
                 type="ReferenceImageArtifact",
                 default_value=None,
                 tooltip=(
-                    f"Up to {self._max_reference_images} tagged reference images. Connect from "
+                    f"Up to {max_reference_images} tagged reference images. Connect from "
                     "'Runway Create Reference Image' nodes."
                 ),
                 allowed_modes={ParameterMode.INPUT},

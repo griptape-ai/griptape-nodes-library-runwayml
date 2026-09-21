@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -333,6 +334,59 @@ class TestErrorDetail:
         message = self.rejection("upstream exploded", status=502)
         assert "502" in message
         assert "upstream exploded" in message
+
+
+class TestApiKey:
+    def test_a_missing_key_names_where_to_set_it(self) -> None:
+        from runway_client import RunwayAuthError, get_api_key
+
+        with patch("runway_client.GriptapeNodes") as gn:
+            gn.SecretsManager.return_value.get_secret.return_value = None
+            with pytest.raises(RunwayAuthError, match="API Keys & Secrets"):
+                get_api_key()
+
+    def test_a_configured_key_is_returned(self) -> None:
+        from runway_client import get_api_key
+
+        with patch("runway_client.GriptapeNodes") as gn:
+            gn.SecretsManager.return_value.get_secret.return_value = "k"
+            assert get_api_key() == "k"
+
+
+class TestTransportFailures:
+    @pytest.mark.asyncio
+    async def test_an_unsendable_submit_is_reported(self) -> None:
+        """A connection error carries no status code, so it must not be mistaken for a rejection."""
+
+        def handler(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+            msg = "network down"
+            raise httpx.ConnectError(msg)
+
+        async with RunwayClient("test", api_key="k", transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(RunwayRequestError, match="could not be sent") as excinfo:
+                await client.submit("image_to_video", {})
+
+        assert excinfo.value.status_code == 0
+
+    @pytest.mark.asyncio
+    async def test_transient_poll_failures_are_retried_before_giving_up(self) -> None:
+        """One blip must not destroy a job that is already billed and still running."""
+        from runway_client import MAX_POLL_ERRORS
+
+        attempts = {"get": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                attempts["get"] += 1
+                if attempts["get"] <= MAX_POLL_ERRORS - 1:
+                    return httpx.Response(502, text="bad gateway")
+                return httpx.Response(200, json={"status": "SUCCEEDED", "output": [OUTPUT_URL]})
+            return httpx.Response(200, json={"id": TASK_ID})
+
+        async with RunwayClient("test", api_key="k", transport=httpx.MockTransport(handler)) as client:
+            assert await client.await_output(TASK_ID) == [OUTPUT_URL]
+
+        assert attempts["get"] == MAX_POLL_ERRORS
 
 
 class TestHeaders:

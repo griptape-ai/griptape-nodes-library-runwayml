@@ -31,6 +31,10 @@ RUNWAY_API_VERSION = "2024-11-06"
 MAX_PROMPT_LENGTH = 1000
 
 
+# Used when a model declares no cap of its own. Every model on the endpoint currently
+# declares 3, so this is a floor rather than a guess.
+DEFAULT_MAX_REFERENCE_IMAGES = 3
+
 # Runway rejects an inlined data URI above this size. The limit applies to the encoded
 # string, so the usable source file is roughly three quarters of it. Enforced while fetching
 # the request, so the drift check cannot see it.
@@ -126,10 +130,9 @@ class ModelSpec:
     resolutions: tuple[str, ...] = ()
     required_fields: frozenset[str] = field(default_factory=frozenset)
     # Every key the node sends for this model. Three endpoints declare
-    # `additionalProperties: false`, so one key Runway does not recognize fails the whole
-    # request -- which is how `references` (a gen4_aleph field) survived into aleph2 payloads.
-    # Checked against the spec's properties by the drift check, and against the node's actual
-    # `build_payload()` output by the test suite.
+    # `additionalProperties: false`, so a single key RunwayML does not recognize fails the whole
+    # request. Checked against the spec's properties by the drift check, and against the node's
+    # actual `build_payload()` output by the test suite.
     payload_fields: frozenset[str] = field(default_factory=frozenset)
 
     @property

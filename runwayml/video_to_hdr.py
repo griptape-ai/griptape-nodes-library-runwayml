@@ -2,7 +2,6 @@ from typing import Any
 
 from api_surface import (
     ENDPOINT_VIDEO_TO_HDR,
-    PRORES_OUTPUT_FORMATS,
     get_model,
     model_choices,
     single_file_output_formats,
@@ -117,13 +116,6 @@ class RunwayML_VideoToHDR(RunwayTaskNode):
             self._sync_prores_visibility(output_format)
 
         return super().after_value_set(parameter, value)
-
-    def _sync_prores_visibility(self, output_format: str) -> None:
-        """Only show the ProRes tier when the chosen format actually carries a ProRes stream."""
-        if output_format in PRORES_OUTPUT_FORMATS:
-            self.show_parameter_by_name("prores_profile")
-        else:
-            self.hide_parameter_by_name("prores_profile")
 
     def _get_video_uri(self) -> str | None:
         """Resolve the ``video`` input to a value the /v1/video_to_hdr endpoint accepts."""
