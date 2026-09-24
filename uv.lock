@@ -463,6 +463,10 @@ dependencies = [
 name = "griptape-runwayml-nodes"
 version = "0.1.0"
 source = { editable = "." }
+dependencies = [
+    { name = "httpx" },
+    { name = "pillow" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -474,6 +478,10 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [
+    { name = "httpx" },
+    { name = "pillow" },
+]
 
 [package.metadata.requires-dev]
 dev = [

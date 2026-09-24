@@ -1,59 +1,66 @@
 import base64
+import mimetypes
 import os
 import subprocess
 import tempfile
-import time
+from typing import Any
 
-import requests
-from griptape.artifacts import ErrorArtifact, ImageUrlArtifact
+from api_surface import (
+    ENDPOINT_VIDEO_TO_VIDEO,
+    get_model,
+    model_choices,
+    single_file_output_formats,
+)
+from griptape.artifacts import VideoUrlArtifact
 from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
-from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
-from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
+from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.files.file import File, FileLoadError
-from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
+from griptape_nodes.retained_mode.griptape_nodes import logger
 from griptape_nodes.traits.options import Options
 from media import coerce_media_url_or_data_uri, prepare_media_data_uri
+from runway_node import RunwayTaskNode
 
-SERVICE = "RunwayML"
-API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
-DEFAULT_MODEL = "gen4_aleph"
+DEFAULT_MODEL = "aleph2"
 
-# Allowed ratio values from RunwayML API docs
-RATIOS = ["1280:720", "720:1280", "1104:832", "832:1104", "960:960", "1584:672"]
-DEFAULT_ASPECT_RATIO = "1280:720"
+# Aleph 2 letterboxes the input to reach a target ratio (expand/outpaint) rather than taking
+# an output resolution, and it deprecated the older `ratio` field. This sentinel keeps
+# `targetAspectRatio` out of the payload so the source framing is preserved untouched.
+MATCH_INPUT_ASPECT_RATIO = "Match input"
+DEFAULT_OUTPUT_FORMAT = "mp4"
+
+# Where a single guidance image is placed in the input video.
+KEYFRAME_START_SECONDS = 0
+
+SUPPORTED_REFERENCE_IMAGE_FORMATS = frozenset({"image/jpeg", "image/jpg", "image/png", "image/webp"})
+
+# Containers RunwayML ingests directly, so they are uploaded byte-for-byte.
+RUNWAY_ACCEPTED_VIDEO_TYPES = frozenset(
+    {"video/mp4", "video/webm", "video/quicktime", "video/mov", "video/ogg", "video/h264"}
+)
+DEFAULT_VIDEO_CONTENT_TYPE = "video/mp4"
 
 
-class VideoUrlArtifact(ImageUrlArtifact):
-    """
-    Artifact that contains a URL to a video.
-    """
-
-    def __init__(self, url: str, name: str | None = None):
-        super().__init__(value=url, name=name or self.__class__.__name__)
-
-
-class RunwayML_VideoToVideo(ControlNode):
-    # Class variable to track last used seed across instances (ComfyUI-style)
-    _last_used_seed: int = 12345
+class RunwayML_VideoToVideo(RunwayTaskNode):
+    endpoint = ENDPOINT_VIDEO_TO_VIDEO
+    output_filename = "output.mp4"
+    output_parameter_name = "video_output"
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self.category = "AI/RunwayML"
         self.description = "Generates a video from an input video and prompt using RunwayML."
-        self.metadata["author"] = "Griptape"
-        self.metadata["dependencies"] = {"pip_dependencies": ["runwayml", "requests"]}
-        self.metadata["description"] = (
-            "We strongly recommend that you install ffmpeg in order to enable video transcoding features in this node."
-        )
 
-        # Individual parameters
-        # Video Parameter
+        default_spec = get_model(DEFAULT_MODEL, ENDPOINT_VIDEO_TO_VIDEO)
+
         self.add_parameter(
             Parameter(
                 name="video",
                 input_types=["VideoUrlArtifact", "VideoArtifact"],
                 type="VideoUrlArtifact",
-                tooltip="The video to process",
+                tooltip=(
+                    f"The video to edit. Must be between {default_spec.min_input_video_seconds} and "
+                    f"{default_spec.max_input_video_seconds} seconds long."
+                ),
                 ui_options={
                     "clickable_file_browser": True,
                     "expander": True,
@@ -61,91 +68,87 @@ class RunwayML_VideoToVideo(ControlNode):
                 },
             )
         )
-        # Prompt Parameter
         self.add_parameter(
-            Parameter(
+            ParameterString(
                 name="prompt",
-                input_types=["str", "TextArtifact"],
-                output_type="str",
-                type="str",
                 default_value="",
-                tooltip="Text prompt describing the desired video content.",
+                tooltip=(
+                    "Text prompt describing the desired edit. Optional: an edit can also be driven "
+                    "by a reference image or a target aspect ratio alone."
+                ),
+                # OUTPUT as well as INPUT so the prompt can travel with the result: an asset
+                # manager publishing the output wants the prompt that produced it.
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY, ParameterMode.OUTPUT},
-                ui_options={
-                    "multiline": True,
-                    "placeholder_text": "e.g., a cinematic shot of a car driving down a road",
-                },
+                multiline=True,
+                placeholder_text="e.g., make it look like a rainy night",
             )
         )
-        # Reference Image Parameter
         self.add_parameter(
             Parameter(
                 name="reference_image",
                 input_types=["ImageArtifact", "ImageUrlArtifact", "str"],
                 type="ImageArtifact",
-                tooltip="Optional reference image for the generation.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.OUTPUT},
+                tooltip=("Optional guidance image applied at the start of the clip. JPEG, PNG, or WebP only."),
+                # OUTPUT as well as INPUT, for the same provenance reason as `prompt`.
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY, ParameterMode.OUTPUT},
+                ui_options={"clickable_file_browser": True},
             )
         )
 
-        # Settings Group
-        with ParameterGroup(name="Generation Settings") as settings_group:
-            Parameter(
+        with ParameterGroup(name="Generation Settings") as settings:
+            model = ParameterString(
                 name="model",
-                input_types=["str"],
-                output_type="str",
-                type="str",
                 default_value=DEFAULT_MODEL,
                 tooltip="RunwayML model to use for generation.",
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-                traits={Options(choices=["gen4_aleph"])},
             )
+            model.add_trait(Options(choices=model_choices(ENDPOINT_VIDEO_TO_VIDEO)))
 
-            Parameter(
-                name="ratio",
-                input_types=["str"],
-                output_type="str",
-                type="str",
-                default_value=DEFAULT_ASPECT_RATIO,
-                tooltip="Aspect ratio for the output video.",
+            target_aspect_ratio = ParameterString(
+                name="target_aspect_ratio",
+                default_value=MATCH_INPUT_ASPECT_RATIO,
+                tooltip=(
+                    "Expand the frame to this aspect ratio, letterboxing the input before "
+                    "generation so the model outpaints the new edges. Leave on "
+                    f"'{MATCH_INPUT_ASPECT_RATIO}' to keep the source framing."
+                ),
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-                traits={Options(choices=RATIOS)},
+            )
+            target_aspect_ratio.add_trait(
+                Options(choices=[MATCH_INPUT_ASPECT_RATIO, *default_spec.target_aspect_ratios])
             )
 
-            Parameter(
-                name="seed",
-                input_types=["int"],
-                output_type="int",
-                type="int",
-                default_value=RunwayML_VideoToVideo._last_used_seed,
-                tooltip="Seed value for reproducible generation",
-                allowed_modes={ParameterMode.PROPERTY, ParameterMode.INPUT, ParameterMode.OUTPUT},
-            )
+            self._add_seed_parameters(settings)
 
-            Parameter(
-                name="seed_control",
-                input_types=["str"],
-                output_type="str",
-                type="str",
-                default_value="randomize",
-                tooltip="Seed control mode: Fixed (use exact value), Increment (+1 each run), Decrement (-1 each run), Randomize (new random each run)",
-                allowed_modes={ParameterMode.PROPERTY},
-                traits={Options(choices=["fixed", "increment", "decrement", "randomize"])},
-            )
-
-            Parameter(
+            public_figure_threshold = ParameterString(
                 name="public_figure_threshold",
-                input_types=["str"],
-                output_type="str",
-                type="str",
                 default_value="auto",
                 tooltip="Public figure threshold for content moderation.",
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-                traits={Options(choices=["auto", "low"])},
             )
-        self.add_node_element(settings_group)
+            public_figure_threshold.add_trait(Options(choices=["auto", "low"]))
+        self.add_node_element(settings)
 
-        # Output Parameters
+        # ProRes is encoded by RunwayML and downloaded as a finished .mov. Nothing here
+        # encodes ProRes locally.
+        with ParameterGroup(name="Professional Output", collapsed=True) as pro_output:
+            output_format = ParameterString(
+                name="output_format",
+                default_value=DEFAULT_OUTPUT_FORMAT,
+                tooltip="Delivery container. Anything other than mp4 carries a per-second credit surcharge.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+            output_format.add_trait(Options(choices=single_file_output_formats(default_spec.output_formats)))
+
+            prores_profile = ParameterString(
+                name="prores_profile",
+                default_value="4444",
+                tooltip="ProRes tier. Only applies when the output format is prores.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+            prores_profile.add_trait(Options(choices=list(default_spec.prores_profiles)))
+        self.add_node_element(pro_output)
+
         self.add_parameter(
             Parameter(
                 name="video_output",
@@ -153,35 +156,34 @@ class RunwayML_VideoToVideo(ControlNode):
                 type="VideoUrlArtifact",
                 default_value=None,
                 allowed_modes={ParameterMode.OUTPUT},
-                tooltip="Output URL of the generated video.",
-                ui_options={"placeholder_text": "", "is_full_width": False, "pulse_on_run": True},
-            )
-        )
-        self.add_parameter(
-            Parameter(
-                name="task_id_output",
-                output_type="str",
-                type="str",
-                default_value=None,
-                allowed_modes={ParameterMode.OUTPUT},
-                tooltip="The Task ID of the generation job from RunwayML.",
-                ui_options={"placeholder_text": ""},
+                tooltip="The generated video, saved into project files.",
+                ui_options={"placeholder_text": "", "is_full_width": True, "pulse_on_run": True},
             )
         )
 
-        self._output_file = ProjectFileParameter(node=self, name="output_file", default_filename="output.mp4")
-        self._output_file.add_parameter()
+        self._add_output_file_parameter()
+        self._create_status_parameters(result_details_placeholder="Generation progress will appear here.")
+
+        self._sync_prores_visibility(DEFAULT_OUTPUT_FORMAT)
+
+    def after_value_set(self, parameter: Parameter, value: Any) -> None:
+        if parameter.name == "output_format":
+            output_format = str(value or DEFAULT_OUTPUT_FORMAT)
+            self._sync_output_extension(output_format)
+            self._sync_prores_visibility(output_format)
+
+        return super().after_value_set(parameter, value)
 
     def _transcode_video_file(self, video_file_path: str) -> str | None:
-        """
-        Transcodes a video file to a format compatible with RunwayML.
-        Returns the path to the transcoded file or None if transcoding failed.
+        """Transcode a video to H.264 so RunwayML receives a known-good format.
+
+        Returns the transcoded path, or None when ffmpeg is unavailable or fails, in which
+        case the caller sends the original bytes.
         """
         try:
             logger.info("RunwayML V2V: Attempting to transcode video to ensure compatibility...")
             transcoded_file = video_file_path + ".transcoded.mp4"
 
-            # Use ffmpeg to transcode to a known good format
             cmd = [
                 "ffmpeg",
                 "-i",
@@ -198,26 +200,20 @@ class RunwayML_VideoToVideo(ControlNode):
                 "experimental",
                 transcoded_file,
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
 
             if os.path.exists(transcoded_file) and os.path.getsize(transcoded_file) > 0:
                 logger.info(f"RunwayML V2V: Successfully transcoded video to H.264: {transcoded_file}")
                 return transcoded_file
-            else:
-                logger.warning(f"RunwayML V2V: Failed to transcode video. Error: {result.stderr}")
-                return None
+
+            logger.warning(f"RunwayML V2V: Failed to transcode video. Error: {result.stderr}")
         except (FileNotFoundError, subprocess.SubprocessError) as e:
-            logger.info(f"RunwayML V2V: ffmpeg not available, skipping video transcoding: {str(e)}")
+            logger.info(f"RunwayML V2V: ffmpeg not available, skipping video transcoding: {e!s}")
             return None
-        except Exception as e:
-            logger.warning(f"RunwayML V2V: Error during video transcoding: {str(e)}")
-            return None
+        return None
 
     def _read_to_data_uri(self, source: str) -> str:
-        """
-        Reads bytes from `source` (a local file path or HTTP(S) URL) via `File`,
-        optionally transcodes them via ffmpeg, and returns a `data:video/mp4;base64,...`
-        URI.
+        """Read `source` (local path or HTTP(S) URL), transcode if needed, and base64 it.
 
         Raises:
             ValueError: If the source cannot be read.
@@ -225,30 +221,51 @@ class RunwayML_VideoToVideo(ControlNode):
         try:
             video_bytes = File(source).read_bytes()
         except FileLoadError as e:
-            raise ValueError(f"RunwayML V2V: failed to read video from {source!r}: {e}") from e
-        except Exception as e:
-            raise ValueError(f"RunwayML V2V: failed to read video from {source!r}: {e}") from e
+            msg = f"RunwayML V2V: failed to read video from {source!r}: {e}"
+            raise ValueError(msg) from e
 
-        content_type = "video/mp4"
+        # Only re-encode a container RunwayML will not take. Transcoding unconditionally cost a
+        # generation of quality on every local input, and this node can be asked to deliver
+        # ProRes 4444 -- where handing the model an 8-bit 4:2:0 source defeats the request.
+        # Only skip the transcode when the extension positively identifies an accepted
+        # container. `guess_type` returns None for an extensionless path or a query-string URL,
+        # and defaulting that to video/mp4 would send unknown bytes up mislabelled and
+        # un-normalized -- the inputs that most need the transcode.
+        guessed = mimetypes.guess_type(source)[0]
+        if guessed in RUNWAY_ACCEPTED_VIDEO_TYPES:
+            logger.info("RunwayML V2V: %s is a format RunwayML accepts; sending it unchanged", guessed)
+            return f"data:{guessed};base64,{base64.b64encode(video_bytes).decode('utf-8')}"
 
+        return self._transcode_to_data_uri(video_bytes, guessed or "an unrecognized container")
+
+    def _transcode_to_data_uri(self, video_bytes: bytes, content_type: str) -> str:
+        """Normalize bytes RunwayML would reject into an H.264 mp4 data URI.
+
+        Falls back to the original bytes when ffmpeg is unavailable, so the request still gets
+        made and RunwayML reports what it does not like.
+        """
+        logger.info("RunwayML V2V: %s needs normalizing for RunwayML", content_type)
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
             temp_file.write(video_bytes)
             temp_file_path = temp_file.name
 
-        transcoded_path = self._transcode_video_file(temp_file_path)
-        file_to_encode = transcoded_path if transcoded_path else temp_file_path
-
-        with open(file_to_encode, "rb") as f:
-            base64_data = base64.b64encode(f.read()).decode("utf-8")
-
+        transcoded_path = None
         try:
-            os.unlink(temp_file_path)
-            if transcoded_path:
-                os.unlink(transcoded_path)
-        except Exception:
-            pass
+            transcoded_path = self._transcode_video_file(temp_file_path)
+            file_to_encode = transcoded_path if transcoded_path else temp_file_path
+            with open(file_to_encode, "rb") as f:
+                base64_data = base64.b64encode(f.read()).decode("utf-8")
+        finally:
+            # In a finally block so a failed transcode or read does not leave temp files behind
+            # on every attempt.
+            for path in (temp_file_path, transcoded_path):
+                if path:
+                    try:
+                        os.unlink(path)
+                    except OSError as e:
+                        logger.debug("RunwayML V2V: could not remove temp file %s: %s", path, e)
 
-        return f"data:{content_type};base64,{base64_data}"
+        return f"data:{DEFAULT_VIDEO_CONTENT_TYPE};base64,{base64_data}"
 
     def _get_video_data_uri(self, param_name: str) -> str | None:
         """Resolve a video input to a value the /v1/video_to_video endpoint accepts.
@@ -275,9 +292,7 @@ class RunwayML_VideoToVideo(ControlNode):
         reference images. HTTPS URLs are downloaded so the format can be inspected;
         data URIs are validated in place. Unsupported formats raise ``ValueError``.
         """
-        SUPPORTED_FORMATS = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
-
-        # Force HTTPS download via ``pass_through_schemes=()`` so we always end up with a
+        # Force an HTTPS download via ``pass_through_schemes=()`` so we always end up with a
         # data URI whose content type we can inspect.
         data_uri = prepare_media_data_uri(
             self.get_parameter_value(param_name),
@@ -288,244 +303,82 @@ class RunwayML_VideoToVideo(ControlNode):
         if not data_uri:
             return None
 
-        # ``prepare_media_data_uri`` always returns a ``data:image/...`` URI here.
         content_type = data_uri.split(":", 1)[1].split(";", 1)[0]
-        if content_type not in SUPPORTED_FORMATS:
-            raise ValueError(
+        if content_type not in SUPPORTED_REFERENCE_IMAGE_FORMATS:
+            msg = (
                 f"Unsupported reference image format: {content_type}. "
                 "Supported formats are image/jpeg, image/png, and image/webp."
             )
+            raise ValueError(msg)
         return data_uri
 
-    def validate_node(self) -> list[Exception] | None:
-        errors = []
-        api_key = GriptapeNodes.SecretsManager().get_secret(API_KEY_ENV_VAR)
+    def validate_before_node_run(self) -> list[Exception] | None:
+        errors = super().validate_before_node_run() or []
 
-        if not api_key:
+        # Presence only: the engine calls this synchronously on its event loop, so reading and
+        # encoding media here would stall every other node. `build_payload` runs in a thread
+        # and reports anything unreadable from there.
+        if not self.get_parameter_value("video"):
             errors.append(
                 ValueError(
-                    f"RunwayML API key not found. Set {API_KEY_ENV_VAR} in environment variables or Griptape Cloud."
+                    f"Attempted to edit a video on '{self.name}'. Failed because no input video is set. "
+                    "Connect a video or choose a file."
                 )
             )
 
-        # Check required video input
         try:
-            video_data = self._get_video_data_uri("video")
+            get_model(str(self.get_parameter_value("model") or ""), ENDPOINT_VIDEO_TO_VIDEO)
         except ValueError as e:
             errors.append(e)
-        else:
-            if not video_data:
-                errors.append(ValueError("Video input ('video') is required and must be a valid URL or data URI."))
 
-        # Check prompt
-        prompt_val = self.get_parameter_value("prompt")
-        if not prompt_val or not str(prompt_val).strip():
-            errors.append(ValueError("Text prompt ('prompt') cannot be empty."))
+        # Aleph 2 treats promptText as optional, so an empty prompt is not an error here, and
+        # prompt length is RunwayML's call rather than ours.
+        return errors or None
 
-        # Check model
-        model_val = self.get_parameter_value("model")
-        if model_val != "gen4_aleph":
-            errors.append(ValueError("Only 'gen4_aleph' model is supported for video-to-video."))
-
-        return errors if errors else None
-
-    def process(self) -> AsyncResult:
-        validation_errors = self.validate_node()
-        if validation_errors:
-            error_message = "; ".join(str(e) for e in validation_errors)
-            logger.error(f"RunwayML V2V validation failed: {error_message}")
-            self.publish_update_to_parameter("video_output", ErrorArtifact(error_message))
-            raise ValueError(f"Validation failed: {error_message}")
-
-        # Get parameter values
-        prompt_text = str(self.get_parameter_value("prompt") or "").strip()
+    def build_payload(self) -> dict[str, Any]:
         model_name = str(self.get_parameter_value("model") or DEFAULT_MODEL)
-        ratio_val = str(self.get_parameter_value("ratio") or DEFAULT_ASPECT_RATIO)
-        public_figure_threshold = str(self.get_parameter_value("public_figure_threshold") or "auto")
+        spec = get_model(model_name, ENDPOINT_VIDEO_TO_VIDEO)
 
-        # Handle seed control (ComfyUI-style)
-        seed_value = int(self.get_parameter_value("seed") or RunwayML_VideoToVideo._last_used_seed)
-        seed_control = self.get_parameter_value("seed_control") or "randomize"
-
-        if seed_control == "fixed":
-            actual_seed = seed_value
-        elif seed_control == "increment":
-            actual_seed = RunwayML_VideoToVideo._last_used_seed + 1
-        elif seed_control == "decrement":
-            actual_seed = RunwayML_VideoToVideo._last_used_seed - 1
-        elif seed_control == "randomize":
-            import random
-
-            actual_seed = random.randint(0, 2**32 - 1)
-        else:
-            actual_seed = seed_value  # fallback
-
-        # Ensure seed is in valid range for API (0 to 4294967295)
-        actual_seed = max(0, min(actual_seed, 4294967295))
-
-        # Update last used seed for next run
-        RunwayML_VideoToVideo._last_used_seed = actual_seed
-
-        # Get video data
         video_uri = self._get_video_data_uri("video")
         if not video_uri:
-            error_msg = "Failed to process video input."
-            self.publish_update_to_parameter("video_output", ErrorArtifact(error_msg))
-            raise ValueError(error_msg)
+            msg = f"Attempted to edit a video on '{self.name}'. Failed because the input video could not be read."
+            raise ValueError(msg)
 
-        # Get reference image if provided
-        reference_image_uri = self._get_image_data_uri("reference_image")
+        payload: dict[str, Any] = {
+            "model": model_name,
+            "videoUri": video_uri,
+            "seed": self._resolve_seed(),
+            "contentModeration": self._content_moderation(),
+        }
 
-        def _download_and_store_video(video_url: str, task_id: str | None = None) -> VideoUrlArtifact:
-            try:
-                logger.info(f"RunwayML V2V: Downloading video from {video_url}")
-                file_content = File(video_url).read()
+        # Runway rejects an empty promptText, so omit the key entirely rather than sending ""
+        # when the edit is driven by a reference image or target ratio.
+        prompt = str(self.get_parameter_value("prompt") or "").strip()
+        if prompt:
+            payload["promptText"] = prompt
 
-                logger.info("RunwayML V2V: Saving video bytes to project storage...")
-                dest = self._output_file.build_file()
-                dest.write_bytes(file_content.content)
-                logger.info(f"RunwayML V2V: Video saved. URL: {dest.location}")
-                return VideoUrlArtifact(url=dest.location, name="runwayml_video_to_video")
-            except FileLoadError as e:
-                logger.error(f"RunwayML V2V: Failed to download and store video: {e}")
-                return VideoUrlArtifact(url=video_url, name="runwayml_video_to_video")
+        target_aspect_ratio = str(self.get_parameter_value("target_aspect_ratio") or MATCH_INPUT_ASPECT_RATIO)
+        if target_aspect_ratio != MATCH_INPUT_ASPECT_RATIO:
+            payload["targetAspectRatio"] = target_aspect_ratio
 
-        def generate_video_async() -> VideoUrlArtifact | ErrorArtifact:
-            try:
-                api_key = GriptapeNodes.SecretsManager().get_secret(API_KEY_ENV_VAR)
-
-                # Build the payload according to the API format
-                task_payload = {
-                    "videoUri": video_uri,
-                    "promptText": prompt_text,
-                    "model": model_name,
-                    "ratio": ratio_val,
-                    "contentModeration": {"publicFigureThreshold": public_figure_threshold},
-                }
-
-                # Add optional seed if non-zero
-                if actual_seed != 0:
-                    task_payload["seed"] = actual_seed
-
-                # Add reference image if provided
-                if reference_image_uri:
-                    task_payload["references"] = [{"type": "image", "uri": reference_image_uri}]
-
-                logger.info(f"RunwayML V2V: Creating task with payload keys: {list(task_payload.keys())}")
-                logger.info(f"RunwayML V2V: Prompt text: '{prompt_text}'")
-
-                # Make direct API call
-                headers = {
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "X-Runway-Version": "2024-11-06",  # Use latest API version
-                }
-
-                response = requests.post(
-                    "https://api.dev.runwayml.com/v1/video_to_video", json=task_payload, headers=headers, timeout=60
+        # `_get_image_data_uri` returns None both when nothing is connected and when the read
+        # failed, so presence is checked separately. Collapsing the two would drop an unreadable
+        # reference, bill a full edit that ignored it, and still report success.
+        if self.get_parameter_value("reference_image"):
+            reference_image_uri = self._get_image_data_uri("reference_image")
+            if not reference_image_uri:
+                msg = (
+                    f"Attempted to edit a video on '{self.name}'. Failed because the reference image "
+                    "could not be read. Check that the file still exists, or clear the input."
                 )
+                raise ValueError(msg)
+            # `references` was gen4_aleph's field. aleph2 declares additionalProperties:false
+            # and does not accept it, so sending it 400s the request outright; timed `keyframes`
+            # replaced it. One guidance image applies at the start of the clip.
+            payload["keyframes"] = [{"uri": reference_image_uri, "seconds": KEYFRAME_START_SECONDS}]
 
-                if response.status_code != 200:
-                    error_body = response.text
-                    logger.error(f"RunwayML V2V: API returned {response.status_code}: {error_body}")
-                    raise ValueError(f"RunwayML API Error ({response.status_code}): {error_body}")
+        self._attach_output_format(payload, spec, default_format=DEFAULT_OUTPUT_FORMAT)
+        return payload
 
-                response_data = response.json()
-                task_id = response_data.get("id")
-                if not task_id:
-                    raise ValueError("No task ID returned from RunwayML API")
-
-                self.publish_update_to_parameter("task_id_output", task_id)
-                logger.info(f"RunwayML V2V: Task created with ID: {task_id}")
-
-                # Poll the task until it's complete
-                max_retries = 120  # 120 retries * 10 seconds = 20 minutes timeout
-                retry_delay = 10  # seconds
-
-                for attempt in range(max_retries):
-                    time.sleep(retry_delay)
-
-                    # Get task status using direct API call
-                    status_response = requests.get(
-                        f"https://api.dev.runwayml.com/v1/tasks/{task_id}", headers=headers, timeout=30
-                    )
-
-                    if status_response.status_code != 200:
-                        raise ValueError(
-                            f"Failed to get task status: {status_response.status_code} - {status_response.text}"
-                        )
-
-                    task_status = status_response.json()
-                    status = task_status.get("status")
-
-                    logger.info(
-                        f"RunwayML V2V generation status (Task ID: {task_id}): {status} (Attempt {attempt + 1}/{max_retries})"
-                    )
-
-                    if status == "SUCCEEDED":
-                        video_url = None
-                        output = task_status.get("output")
-
-                        # Extract the video URL from the response
-                        if output:
-                            if isinstance(output, list) and len(output) > 0:
-                                output_item = output[0]
-                                if isinstance(output_item, dict) and "url" in output_item:
-                                    video_url = output_item["url"]
-                                elif isinstance(output_item, str) and output_item.startswith(("http://", "https://")):
-                                    video_url = output_item
-                            elif isinstance(output, dict) and "url" in output:
-                                video_url = output["url"]
-                            elif isinstance(output, str) and output.startswith(("http://", "https://")):
-                                video_url = output
-
-                        if video_url:
-                            logger.info(f"RunwayML V2V generation succeeded: {video_url}")
-                            video_artifact = _download_and_store_video(video_url, task_id)
-                            self.publish_update_to_parameter("video_output", video_artifact)
-                            self.publish_update_to_parameter("seed", actual_seed)
-                            return video_artifact
-                        else:
-                            logger.error(
-                                f"RunwayML V2V task SUCCEEDED but no output URL found. Output structure: {output}"
-                            )
-                            err_msg = "RunwayML V2V task SUCCEEDED but no output URL found."
-                            self.publish_update_to_parameter("video_output", ErrorArtifact(err_msg))
-                            self.publish_update_to_parameter("seed", actual_seed)
-                            return ErrorArtifact(err_msg)
-
-                    elif status == "FAILED":
-                        error_msg = f"RunwayML V2V generation failed (Task ID: {task_id})."
-                        error_detail = task_status.get("error")
-                        if error_detail:
-                            error_msg += f" Reason: {error_detail}"
-                        logger.error(error_msg)
-                        self.publish_update_to_parameter("video_output", ErrorArtifact(error_msg))
-                        self.publish_update_to_parameter("seed", actual_seed)
-                        return ErrorArtifact(error_msg)
-
-                timeout_msg = f"RunwayML V2V task (ID: {task_id}) timed out after {max_retries * retry_delay} seconds."
-                logger.error(timeout_msg)
-                self.publish_update_to_parameter("video_output", ErrorArtifact(timeout_msg))
-                self.publish_update_to_parameter("seed", actual_seed)
-                return ErrorArtifact(timeout_msg)
-
-            except Exception as e:
-                error_message = f"RunwayML V2V unexpected error: {type(e).__name__} - {e}"
-
-                # Handle specific API errors
-                if hasattr(e, "status_code") and e.status_code == 413:
-                    error_message = "Media too large! RunwayML has a limit for data URIs. Try using smaller files or HTTPS URLs instead of local files."
-                elif hasattr(e, "response") and hasattr(e.response, "status_code") and e.response.status_code == 413:
-                    error_message = "Media too large! RunwayML has a limit for data URIs. Try using smaller files or HTTPS URLs instead of local files."
-                elif "413" in str(e) or "Request Entity Too Large" in str(e):
-                    error_message = "Media too large! RunwayML has a limit for data URIs. Try using smaller files or HTTPS URLs instead of local files."
-
-                logger.exception(error_message)
-                self.publish_update_to_parameter("video_output", ErrorArtifact(error_message))
-                self.publish_update_to_parameter(
-                    "seed", actual_seed if "actual_seed" in locals() else RunwayML_VideoToVideo._last_used_seed
-                )
-                return ErrorArtifact(error_message)
-
-        yield generate_video_async
+    def build_artifact(self, location: str) -> VideoUrlArtifact:
+        return VideoUrlArtifact(value=location, name="runwayml_video_to_video")

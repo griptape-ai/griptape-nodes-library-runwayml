@@ -99,8 +99,12 @@ fix: ## Fix project.
 test: ## Run unit tests.
 	@uv run pytest
 
+.PHONY: api/drift
+api/drift: ## Diff api_surface.py against Runway's live OpenAPI spec. Needs network.
+	@uv run python scripts/check_api_drift.py
+
 .PHONY: check
-check: check/format check/lint check/types check/test ## Run all checks.
+check: check/format check/lint check/types check/test ## Run all checks. Offline; see api/drift.
 
 .PHONY: check/format
 check/format:

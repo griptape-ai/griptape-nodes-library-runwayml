@@ -1,52 +1,48 @@
-import os
-import time
+from typing import Any
 
-import requests
-from griptape.artifacts import ErrorArtifact, ImageUrlArtifact
-from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
-from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
-from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
-from griptape_nodes.files.file import File, FileLoadError
-from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
+from api_surface import ENDPOINT_VIDEO_UPSCALE, get_model, model_choices
+from griptape.artifacts import VideoUrlArtifact
+from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
+from griptape_nodes.exe_types.param_types.parameter_bool import ParameterBool
+from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
+from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.traits.options import Options
 from media import prepare_media_data_uri
+from runway_node import RunwayTaskNode
+
+DEFAULT_MODEL = "magnific_video_upscaler_creative"
+
+DEFAULT_RESOLUTION = "2k"
+FLAVORS = ["vivid", "natural"]
+DEFAULT_FLAVOR = "natural"
+
+# Runway scores creativity, sharpen, and smart grain on the same 0-100 scale.
+STRENGTH_MIN = 0
+STRENGTH_MAX = 100
 
 
-# Reuse the VideoUrlArtifact defined alongside ImageUrlArtifact in existing node
-# Define a lightweight VideoUrlArtifact locally to avoid package import issues
-class VideoUrlArtifact(ImageUrlArtifact):
-    """Artifact that contains a URL to a video."""
+class RunwayML_VideoUpscale(RunwayTaskNode):
+    endpoint = ENDPOINT_VIDEO_UPSCALE
+    output_filename = "output.mp4"
+    output_parameter_name = "video_output"
 
-    def __init__(self, url: str, name: str | None = None):
-        super().__init__(value=url, name=name or self.__class__.__name__)
-
-
-SERVICE = "RunwayML"
-API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
-DEFAULT_MODEL = "upscale_v1"
-
-# Hardcoded polling (matches library pattern)
-MAX_RETRIES = 120  # 20 minutes @ 10s
-RETRY_DELAY_SECONDS = 10
-
-
-class RunwayML_VideoUpscale(ControlNode):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.category = "AI/RunwayML"
-        self.description = "Upscales a video by ~4× (capped at 4096px) using RunwayML."
-        self.metadata["author"] = "Griptape"
-        self.metadata["dependencies"] = {"pip_dependencies": ["requests"]}
+        default_spec = get_model(DEFAULT_MODEL, ENDPOINT_VIDEO_UPSCALE)
 
-        # Input Parameters
+        self.category = "AI/RunwayML"
+        self.description = "Upscales a video using RunwayML's Magnific video upscaler."
+
+        # Plain Parameter, not ParameterString: ParameterString hardcodes type/output_type to
+        # "str" and silently ignores the ones passed in, which would break artifact connections.
         self.add_parameter(
             Parameter(
                 name="video",
                 input_types=["VideoUrlArtifact", "VideoArtifact"],
                 type="VideoUrlArtifact",
                 tooltip=(
-                    "Input video (HTTPS URL or data URI). Allowed content-types: video/mp4, video/webm, "
-                    "video/quicktime, video/mov, video/ogg, video/h264. Max 16MB; max duration 40s."
+                    "Input video. Allowed content-types: video/mp4, video/webm, video/quicktime, "
+                    f"video/mov, video/ogg, video/h264. Max duration {default_spec.max_input_video_seconds}s."
                 ),
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
                 ui_options={
@@ -57,20 +53,74 @@ class RunwayML_VideoUpscale(ControlNode):
             )
         )
 
-        self.add_parameter(
-            Parameter(
-                name="model",
-                input_types=["str"],
-                output_type="str",
-                type="str",
-                default_value=DEFAULT_MODEL,
-                tooltip="RunwayML model variant to use for upscaling.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-                traits={Options(choices=[DEFAULT_MODEL])},
-            )
+        model = ParameterString(
+            name="model",
+            default_value=DEFAULT_MODEL,
+            tooltip="RunwayML model variant to use for upscaling.",
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
+        model.add_trait(Options(choices=model_choices(ENDPOINT_VIDEO_UPSCALE)))
+        self.add_parameter(model)
 
-        # Output Parameters
+        resolution = ParameterString(
+            name="resolution",
+            default_value=DEFAULT_RESOLUTION,
+            tooltip="Output resolution. Billing is per output frame, so 4k costs considerably more than 720p.",
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        )
+        resolution.add_trait(Options(choices=list(default_spec.resolutions)))
+        self.add_parameter(resolution)
+
+        with ParameterGroup(name="Upscaler Settings", collapsed=True) as settings:
+            flavor = ParameterString(
+                name="flavor",
+                default_value=DEFAULT_FLAVOR,
+                tooltip="Overall look: 'natural' stays closer to the source, 'vivid' pushes contrast and colour.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+            flavor.add_trait(Options(choices=FLAVORS))
+
+            ParameterInt(
+                name="creativity",
+                default_value=STRENGTH_MIN,
+                min_val=STRENGTH_MIN,
+                max_val=STRENGTH_MAX,
+                slider=True,
+                validate_min_max=True,
+                tooltip=(
+                    "How much detail the upscaler is allowed to invent. Higher values add detail "
+                    "that was not in the source, which can drift from the original footage."
+                ),
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+            ParameterInt(
+                name="sharpen",
+                default_value=STRENGTH_MIN,
+                min_val=STRENGTH_MIN,
+                max_val=STRENGTH_MAX,
+                slider=True,
+                validate_min_max=True,
+                tooltip="Edge sharpening applied to the upscaled frames.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+            ParameterInt(
+                name="smart_grain",
+                default_value=STRENGTH_MIN,
+                min_val=STRENGTH_MIN,
+                max_val=STRENGTH_MAX,
+                slider=True,
+                validate_min_max=True,
+                tooltip="Film grain added after upscaling, to keep the result from looking overly clean.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+            ParameterBool(
+                name="fps_boost",
+                default_value=False,
+                tooltip="Interpolate additional frames to raise the output frame rate.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+        self.add_node_element(settings)
+
         self.add_parameter(
             Parameter(
                 name="video_output",
@@ -78,27 +128,13 @@ class RunwayML_VideoUpscale(ControlNode):
                 type="VideoUrlArtifact",
                 default_value=None,
                 allowed_modes={ParameterMode.OUTPUT},
-                tooltip="URL of the upscaled video (saved to static files).",
+                tooltip="The upscaled video, saved into project files.",
                 ui_options={"placeholder_text": "", "is_full_width": True, "pulse_on_run": True},
             )
         )
+        self._add_output_file_parameter()
+        self._create_status_parameters(result_details_placeholder="Upscaling progress will appear here.")
 
-        self.add_parameter(
-            Parameter(
-                name="task_id_output",
-                output_type="str",
-                type="str",
-                default_value=None,
-                allowed_modes={ParameterMode.OUTPUT},
-                tooltip="The Task ID of the RunwayML job.",
-                ui_options={"placeholder_text": ""},
-            )
-        )
-
-        self._output_file = ProjectFileParameter(node=self, name="output_file", default_filename="output.mp4")
-        self._output_file.add_parameter()
-
-    # --- Helpers ---
     def _get_video_uri(self) -> str | None:
         """Resolve the ``video`` input to a value the /v1/video_upscale endpoint accepts.
 
@@ -109,197 +145,49 @@ class RunwayML_VideoUpscale(ControlNode):
         return prepare_media_data_uri(
             self.get_parameter_value("video"),
             kind="video",
-            node_name="RunwayML VideoUpscale",
+            node_name=self.name,
         )
 
-    def _download_and_store_video(self, video_url: str, task_id: str | None = None) -> VideoUrlArtifact:
-        try:
-            logger.info(f"RunwayML VideoUpscale: Downloading video from {video_url}")
-            file_content = File(video_url).read()
+    def validate_before_node_run(self) -> list[Exception] | None:
+        errors = super().validate_before_node_run() or []
 
-            dest = self._output_file.build_file()
-            dest.write_bytes(file_content.content)
-            return VideoUrlArtifact(url=dest.location, name="runwayml_upscaled_video")
-        except FileLoadError as e:
-            logger.error(f"RunwayML VideoUpscale: Failed to download and store video: {e}")
-            # Fallback to original URL if we can't save
-            return VideoUrlArtifact(url=video_url, name="runwayml_video")
-
-    def _log_storage_env_hints(self) -> None:
-        try:
-            sm = GriptapeNodes.StaticFilesManager()
-            logger.info("RunwayML VideoUpscale: StaticFilesManager instance: %s", sm.__class__.__name__)
-            # Attempt to log likely backend attribute names if present (without secrets)
-            backend_attr_names = [
-                n for n in dir(sm) if any(k in n.lower() for k in ["backend", "storage", "bucket", "client"])
-            ]
-            logger.info("RunwayML VideoUpscale: StaticFilesManager attrs (subset): %s", backend_attr_names)
-
-            # Environment hints (keys only + masked preview)
-            prefixes = [
-                "GT_",
-                "GRIPTAPE_",
-                "STATIC_",
-                "STORAGE_",
-                "AWS_",
-                "AZURE_",
-                "GCP_",
-                "GOOGLE_",
-                "GCLOUD_",
-                "S3_",
-                "R2_",
-                "DO_SPACES_",
-                "SUPABASE_",
-                "MINIO_",
-                "BUCKET_",
-                "BACKBLAZE_",
-                "B2_",
-                "CLOUDFLARE_",
-            ]
-
-            def _mask(val: str) -> str:
-                s = str(val)
-                if len(s) <= 8:
-                    return "***"
-                return s[:3] + "***" + s[-2:]
-
-            matched = []
-            for k, v in os.environ.items():
-                if any(k.startswith(p) for p in prefixes):
-                    matched.append((k, _mask(v)))
-            if matched:
-                logger.info("RunwayML VideoUpscale: Detected env keys: %s", [k for k, _ in matched])
-            else:
-                logger.info("RunwayML VideoUpscale: No storage-related env keys detected")
-        except Exception as e:
-            logger.warning(f"RunwayML VideoUpscale: Failed to log storage env hints: {e}")
-
-    # --- Execution ---
-    def validate_node(self) -> list[Exception] | None:
-        errors: list[Exception] = []
-        api_key = GriptapeNodes.SecretsManager().get_secret(API_KEY_ENV_VAR)
-        if not api_key:
+        # Presence only: the engine calls this synchronously on its event loop, so reading and
+        # encoding media here would stall every other node. `build_payload` runs in a thread
+        # and reports anything unreadable from there.
+        if not self.get_parameter_value("video"):
             errors.append(
                 ValueError(
-                    f"RunwayML API key not found. Set {API_KEY_ENV_VAR} in environment variables or Griptape Cloud."
+                    f"Attempted to upscale a video on '{self.name}'. Failed because no input video is set. "
+                    "Connect a video or choose a file."
                 )
             )
 
-        video_uri = self._get_video_uri()
-        if not video_uri or not isinstance(video_uri, str) or not video_uri.strip():
-            errors.append(ValueError("Video input ('video') is required and must be a URL or data URI."))
+        try:
+            get_model(str(self.get_parameter_value("model") or ""), ENDPOINT_VIDEO_UPSCALE)
+        except ValueError as e:
+            errors.append(e)
 
-        return errors if errors else None
+        return errors or None
 
-    def process(self) -> AsyncResult:
-        validation_errors = self.validate_node()
-        if validation_errors:
-            error_message = "; ".join(str(e) for e in validation_errors)
-            logger.error(f"RunwayML VideoUpscale validation failed: {error_message}")
-            self.publish_update_to_parameter("video_output", ErrorArtifact(error_message))
-            raise ValueError(f"Validation failed: {error_message}")
-
-        # Log storage/backend hints once per run
-        self._log_storage_env_hints()
-
+    def build_payload(self) -> dict[str, Any]:
         model_name = str(self.get_parameter_value("model") or DEFAULT_MODEL)
+        get_model(model_name, ENDPOINT_VIDEO_UPSCALE)
+
         video_uri = self._get_video_uri()
+        if not video_uri:
+            msg = f"Attempted to upscale a video on '{self.name}'. Failed because the input video could not be read."
+            raise ValueError(msg)
 
-        def upscale_async() -> VideoUrlArtifact | ErrorArtifact:
-            try:
-                api_key = GriptapeNodes.SecretsManager().get_secret(API_KEY_ENV_VAR)
+        return {
+            "model": model_name,
+            "videoUri": video_uri,
+            "resolution": str(self.get_parameter_value("resolution") or DEFAULT_RESOLUTION),
+            "flavor": str(self.get_parameter_value("flavor") or DEFAULT_FLAVOR),
+            "creativity": int(self.get_parameter_value("creativity") or STRENGTH_MIN),
+            "sharpen": int(self.get_parameter_value("sharpen") or STRENGTH_MIN),
+            "smartGrain": int(self.get_parameter_value("smart_grain") or STRENGTH_MIN),
+            "fpsBoost": bool(self.get_parameter_value("fps_boost")),
+        }
 
-                payload = {"model": model_name, "videoUri": video_uri}
-                logger.info(f"RunwayML VideoUpscale: Creating task with payload keys: {list(payload.keys())}")
-
-                headers = {
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "X-Runway-Version": "2024-11-06",
-                }
-
-                response = requests.post(
-                    "https://api.dev.runwayml.com/v1/video_upscale",
-                    json=payload,
-                    headers=headers,
-                    timeout=60,
-                )
-                if response.status_code != 200:
-                    error_body = response.text
-                    logger.error(f"RunwayML VideoUpscale: API returned {response.status_code}: {error_body}")
-                    raise ValueError(f"RunwayML API Error ({response.status_code}): {error_body}")
-                task_resp = response.json()
-                task_id = task_resp.get("id")
-                if task_id:
-                    self.publish_update_to_parameter("task_id_output", task_id)
-                logger.info(f"RunwayML VideoUpscale: Task created with ID: {task_id}")
-
-                for attempt in range(MAX_RETRIES):
-                    time.sleep(RETRY_DELAY_SECONDS)
-                    status_response = requests.get(
-                        f"https://api.dev.runwayml.com/v1/tasks/{task_id}",
-                        headers=headers,
-                        timeout=30,
-                    )
-                    status_response.raise_for_status()
-                    status_resp = status_response.json()
-                    status = status_resp.get("status")
-                    logger.info(
-                        f"RunwayML VideoUpscale status (Task ID: {task_id}): {status} (Attempt {attempt + 1}/{MAX_RETRIES})"
-                    )
-
-                    if status == "SUCCEEDED":
-                        output_url: str | None = None
-                        out = status_resp.get("output", None)
-                        if out:
-                            if isinstance(out, list) and len(out) > 0:
-                                item = out[0]
-                                if isinstance(item, dict) and "url" in item:
-                                    output_url = item.get("url")
-                                elif isinstance(item, str) and item.startswith(("http://", "https://")):
-                                    output_url = item
-                            elif isinstance(out, dict) and "url" in out:
-                                output_url = out.get("url")
-                            elif isinstance(out, str) and out.startswith(("http://", "https://")):
-                                output_url = out
-
-                        if output_url:
-                            logger.info(f"RunwayML VideoUpscale succeeded: {output_url}")
-                            # Always save to static files (per request)
-                            artifact = self._download_and_store_video(output_url, task_id)
-                            self.publish_update_to_parameter("video_output", artifact)
-                            return artifact
-                        else:
-                            err_msg = "RunwayML VideoUpscale task SUCCEEDED but no output URL found."
-                            logger.error(err_msg)
-                            self.publish_update_to_parameter("video_output", ErrorArtifact(err_msg))
-                            return ErrorArtifact(err_msg)
-
-                    if status == "FAILED":
-                        error_msg = f"RunwayML VideoUpscale failed (Task ID: {task_id})."
-                        if getattr(status_resp, "error", None):
-                            error_msg += f" Reason: {getattr(status_resp, 'error', None)}"
-                        logger.error(error_msg)
-                        self.publish_update_to_parameter("video_output", ErrorArtifact(error_msg))
-                        return ErrorArtifact(error_msg)
-
-                timeout_msg = (
-                    f"RunwayML VideoUpscale task (ID: {task_id}) timed out after "
-                    f"{MAX_RETRIES * RETRY_DELAY_SECONDS} seconds."
-                )
-                logger.error(timeout_msg)
-                self.publish_update_to_parameter("video_output", ErrorArtifact(timeout_msg))
-                return ErrorArtifact(timeout_msg)
-
-            except Exception as e:
-                error_message = f"RunwayML VideoUpscale unexpected error: {type(e).__name__} - {e}"
-                if hasattr(e, "status") and hasattr(e, "reason") and hasattr(e, "body"):
-                    error_message = (
-                        f"RunwayML API Error: Status {getattr(e, 'status', 'N/A')} - "
-                        f"Reason: {getattr(e, 'reason', 'N/A')} - Body: {getattr(e, 'body', 'N/A')}"
-                    )
-                logger.exception(error_message)
-                self.publish_update_to_parameter("video_output", ErrorArtifact(error_message))
-                return ErrorArtifact(error_message)
-
-        yield upscale_async
+    def build_artifact(self, location: str) -> VideoUrlArtifact:
+        return VideoUrlArtifact(value=location, name="runwayml_upscaled_video")

@@ -11,8 +11,8 @@ from collections.abc import Iterator
 from unittest.mock import patch
 
 import pytest
-from act_two import RunwayML_ActTwo, VideoUrlArtifact
-from griptape.artifacts import ImageUrlArtifact
+from act_two import RunwayML_ActTwo
+from griptape.artifacts import ImageUrlArtifact, VideoUrlArtifact
 
 
 @pytest.fixture
@@ -22,8 +22,7 @@ def node() -> RunwayML_ActTwo:
 
 @pytest.fixture(autouse=True)
 def _stub_secret() -> Iterator[None]:
-    with patch("act_two.GriptapeNodes") as gn:
-        gn.SecretsManager.return_value.get_secret.return_value = "fake-key"
+    with patch("runway_node.get_api_key", return_value="fake-key"):
         yield
 
 
@@ -39,11 +38,15 @@ def test_https_image_and_video_validate_without_loading(node: RunwayML_ActTwo) -
     node.set_parameter_value("character_image", "https://example.com/i.png")
     node.set_parameter_value("reference_video", "https://example.com/v.mp4")
 
-    assert node.validate_node() is None
+    assert node.validate_before_node_run() is None
 
 
 def test_url_artifact_with_macro_path_resolves_via_file(node: RunwayML_ActTwo) -> None:
-    """Regression: ``LoadImage``/``LoadVideo`` outputs use ``{inputs}/...`` macro paths."""
+    """Regression: ``LoadImage``/``LoadVideo`` outputs use ``{inputs}/...`` macro paths.
+
+    Asserted against ``build_payload`` rather than validation: validation is deliberately a
+    presence check, because the engine calls it on its event loop.
+    """
     _set_minimal_required(node)
     node.set_parameter_value("character_image", ImageUrlArtifact("{inputs}/image_196.png"))
     node.set_parameter_value("reference_video", VideoUrlArtifact("{inputs}/clip.mp4"))
@@ -53,9 +56,12 @@ def test_url_artifact_with_macro_path_resolves_via_file(node: RunwayML_ActTwo) -
             "data:image/png;base64,IMG",
             "data:video/mp4;base64,VID",
         ]
-        assert node.validate_node() is None
-        assert MockFile.call_args_list[0].args[0] == "{inputs}/image_196.png"
-        assert MockFile.call_args_list[1].args[0] == "{inputs}/clip.mp4"
+        payload = node.build_payload()
+
+    assert payload["character"]["uri"] == "data:image/png;base64,IMG"
+    assert payload["reference"]["uri"] == "data:video/mp4;base64,VID"
+    assert MockFile.call_args_list[0].args[0] == "{inputs}/image_196.png"
+    assert MockFile.call_args_list[1].args[0] == "{inputs}/clip.mp4"
 
 
 def test_missing_character_image_yields_required_error(node: RunwayML_ActTwo) -> None:
@@ -63,9 +69,9 @@ def test_missing_character_image_yields_required_error(node: RunwayML_ActTwo) ->
     node.set_parameter_value("character_image", None)
     node.set_parameter_value("reference_video", "https://example.com/v.mp4")
 
-    errors = node.validate_node()
+    errors = node.validate_before_node_run()
     assert errors is not None
-    assert any("Character image is required" in str(e) for e in errors)
+    assert any("no character image is set" in str(e) for e in errors)
 
 
 def test_missing_reference_video_yields_required_error(node: RunwayML_ActTwo) -> None:
@@ -73,6 +79,6 @@ def test_missing_reference_video_yields_required_error(node: RunwayML_ActTwo) ->
     node.set_parameter_value("character_image", "https://example.com/i.png")
     node.set_parameter_value("reference_video", None)
 
-    errors = node.validate_node()
+    errors = node.validate_before_node_run()
     assert errors is not None
-    assert any("Reference video" in str(e) for e in errors)
+    assert any("no reference video" in str(e) for e in errors)

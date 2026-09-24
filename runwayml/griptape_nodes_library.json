@@ -15,8 +15,8 @@
     "metadata": {
         "author": "Griptape",
         "description": "Griptape Nodes for interacting with the RunwayML API.",
-        "library_version": "0.1.2",
-        "engine_version": "0.75.0",
+        "library_version": "0.2.0",
+        "engine_version": "0.101.0",
         "tags": [
             "Griptape",
             "AI",
@@ -26,8 +26,8 @@
         ],
         "dependencies": {
             "pip_dependencies": [
-                "requests",
-                "Pillow"
+                "httpx",
+                "pillow"
             ]
         }
     },
@@ -66,6 +66,24 @@
                 "category": "video/runwayml",
                 "description": "Generates a video from an image and a text prompt using the RunwayML image-to-video API.",
                 "display_name": "Runway Image-to-Video"
+            }
+        },
+        {
+            "class_name": "RunwayML_TextToVideo",
+            "file_path": "text_to_video.py",
+            "metadata": {
+                "category": "video/runwayml",
+                "description": "Generates a video from a text prompt using the RunwayML text-to-video API.",
+                "display_name": "Runway Text-to-Video"
+            }
+        },
+        {
+            "class_name": "RunwayML_VideoToHDR",
+            "file_path": "video_to_hdr.py",
+            "metadata": {
+                "category": "video/runwayml",
+                "description": "Converts an SDR video to true HDR using RunwayML's Ruby grading model.",
+                "display_name": "Runway Video-to-HDR"
             }
         },
         {

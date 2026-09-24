@@ -1,119 +1,137 @@
-import time
 from typing import Any
 
-import requests
-from griptape.artifacts import ErrorArtifact, ImageUrlArtifact
-from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
-from griptape_nodes.exe_types.node_types import AsyncResult, ControlNode
-from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
-from griptape_nodes.files.file import File, FileLoadError
-from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
+from api_surface import (
+    ENDPOINT_IMAGE_TO_VIDEO,
+    MAX_PROMPT_LENGTH,
+    get_model,
+    model_choices,
+    single_file_output_formats,
+)
+from griptape.artifacts import VideoUrlArtifact
+from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
+from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
+from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.traits.options import Options
 from media import prepare_media_data_uri
+from runway_node import RunwayTaskNode
 
-SERVICE = "RunwayML"
-API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
+# Kept as the default over the higher-quality `gen4.5` so existing workflows do not
+# silently move to a different model, and a different per-second price, on upgrade.
 DEFAULT_MODEL = "gen4_turbo"
 
-# Allowed ratio values by model from RunwayML API docs
-GEN4_TURBO_RATIOS = ["1280:720", "720:1280", "1104:832", "832:1104", "960:960", "1584:672"]
-GEN3A_TURBO_RATIOS = ["1280:768", "768:1280"]
-GEN4_DEFAULT_ASPECT_RATIO = "1280:720"
-GEN3A_DEFAULT_ASPECT_RATIO = "1280:768"
+DEFAULT_ASPECT_RATIO = "1280:720"
+DEFAULT_DURATION = 10
+DEFAULT_OUTPUT_FORMAT = "mp4"
+
+# Only `gen4.5` accepts the professional delivery formats; `gen4_turbo` returns H.264 mp4
+# only, so the group is hidden unless it can do anything.
+PRO_OUTPUT_MODELS = frozenset({"gen4.5"})
 
 
-class VideoUrlArtifact(ImageUrlArtifact):
-    """
-    Artifact that contains a URL to a video.
-    """
+class RunwayML_ImageToVideo(RunwayTaskNode):
+    endpoint = ENDPOINT_IMAGE_TO_VIDEO
+    output_filename = "output.mp4"
+    output_parameter_name = "video_output"
 
-    def __init__(self, url: str, name: str | None = None):
-        super().__init__(value=url, name=name or self.__class__.__name__)
-
-
-class RunwayML_ImageToVideo(ControlNode):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self.category = "AI/RunwayML"
         self.description = "Generates a video from an image and prompt using RunwayML."
-        self.metadata["author"] = "Griptape"
-        self.metadata["dependencies"] = {"pip_dependencies": ["requests"]}
 
-        # Individual parameters (following Kling pattern)
         self.add_parameter(
             Parameter(
                 name="image",
-                input_types=["ImageUrlArtifact", "str"],
+                input_types=["ImageUrlArtifact", "ImageArtifact", "str"],
                 type="ImageUrlArtifact",
-                tooltip="Input image (required). Accepts ImageUrlArtifact, a public URL string, or a base64 data URI string.",
-                allowed_modes={ParameterMode.INPUT},
+                tooltip="Starting frame for the video. Accepts an image artifact, a public URL, or a data URI.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+                ui_options={"clickable_file_browser": True},
             )
         )
         self.add_parameter(
-            Parameter(
+            ParameterString(
                 name="prompt",
-                input_types=["str", "TextArtifact"],
-                output_type="str",
-                type="str",
                 default_value="",
-                tooltip="Text prompt describing the desired video content.",
+                tooltip=f"Text prompt describing the desired video content (max {MAX_PROMPT_LENGTH} characters).",
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-                ui_options={
-                    "multiline": True,
-                    "placeholder_text": "e.g., a cinematic shot of a car driving down a road",
-                },
-            )
-        )
-        self.add_parameter(
-            Parameter(
-                name="model",
-                input_types=["str"],
-                output_type="str",
-                type="str",
-                default_value=DEFAULT_MODEL,
-                tooltip="RunwayML model to use for generation.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-                traits={Options(choices=["gen4_turbo", "gen3a_turbo"])},
-            )
-        )
-        self.add_parameter(
-            Parameter(
-                name="ratio",
-                input_types=["str"],
-                output_type="str",
-                type="str",
-                default_value=GEN4_DEFAULT_ASPECT_RATIO,
-                tooltip="Aspect ratio for the output video. Available ratios depend on selected model.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-                traits={Options(choices=GEN4_TURBO_RATIOS)},
+                multiline=True,
+                placeholder_text="e.g., a cinematic shot of a car driving down a road",
             )
         )
 
+        model = ParameterString(
+            name="model",
+            default_value=DEFAULT_MODEL,
+            tooltip="RunwayML model to use for generation. gen4.5 is higher quality; gen4_turbo is faster and cheaper.",
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        )
+        model.add_trait(Options(choices=model_choices(ENDPOINT_IMAGE_TO_VIDEO)))
+        self.add_parameter(model)
+
+        default_spec = get_model(DEFAULT_MODEL, ENDPOINT_IMAGE_TO_VIDEO)
+
+        ratio = ParameterString(
+            name="ratio",
+            default_value=DEFAULT_ASPECT_RATIO,
+            tooltip="Aspect ratio for the output video. Available ratios depend on the selected model.",
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        )
+        ratio.add_trait(Options(choices=list(default_spec.ratios)))
+        self.add_parameter(ratio)
+
         self.add_parameter(
-            Parameter(
+            ParameterInt(
                 name="duration",
-                input_types=["int"],
-                output_type="int",
-                type="int",
-                default_value=10,
-                tooltip="Duration of output video in seconds.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-                traits={Options(choices=[5, 10])},
-            )
-        )
-        self.add_parameter(
-            Parameter(
-                name="seed",
-                input_types=["int"],
-                output_type="int",
-                type="int",
-                default_value=0,
-                tooltip="Seed for generation. 0 for random.",
+                default_value=DEFAULT_DURATION,
+                min_val=default_spec.duration_min,
+                max_val=default_spec.duration_max,
+                validate_min_max=True,
+                tooltip=(
+                    f"Duration of the output video in seconds "
+                    f"({default_spec.duration_min}-{default_spec.duration_max}). Billed per second."
+                ),
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
             )
         )
 
-        # Output Parameters
+        with ParameterGroup(name="Generation Settings", collapsed=True) as settings:
+            self._add_seed_parameters(settings)
+            content_moderation = ParameterString(
+                name="content_moderation",
+                default_value="auto",
+                tooltip="Content moderation level. 'low' is less strict about public figures.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+            content_moderation.add_trait(Options(choices=["auto", "low"]))
+        self.add_node_element(settings)
+
+        # ProRes and the 10/12-bit HDR profiles are encoded by RunwayML and downloaded as
+        # finished files. Nothing here encodes them locally.
+        with ParameterGroup(name="Professional Output", collapsed=True) as pro_output:
+            output_format = ParameterString(
+                name="output_format",
+                default_value=DEFAULT_OUTPUT_FORMAT,
+                tooltip=(
+                    "Delivery container. Anything other than mp4 carries a per-second credit "
+                    "surcharge. Only available on gen4.5."
+                ),
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+            output_format.add_trait(
+                Options(choices=single_file_output_formats(get_model("gen4.5", ENDPOINT_IMAGE_TO_VIDEO).output_formats))
+            )
+
+            prores_profile = ParameterString(
+                name="prores_profile",
+                default_value="4444",
+                tooltip="ProRes tier. Only applies when the output format is prores or hdr_prores.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+            prores_profile.add_trait(
+                Options(choices=list(get_model("gen4.5", ENDPOINT_IMAGE_TO_VIDEO).prores_profiles))
+            )
+        self.add_node_element(pro_output)
+
         self.add_parameter(
             Parameter(
                 name="video_output",
@@ -121,214 +139,127 @@ class RunwayML_ImageToVideo(ControlNode):
                 type="VideoUrlArtifact",
                 default_value=None,
                 allowed_modes={ParameterMode.OUTPUT},
-                tooltip="Output URL of the generated video.",
+                tooltip="The generated video, saved into project files.",
                 ui_options={"placeholder_text": "", "is_full_width": True, "pulse_on_run": True},
             )
         )
-        self.add_parameter(
-            Parameter(
-                name="task_id_output",
-                output_type="str",
-                type="str",
-                default_value=None,
-                allowed_modes={ParameterMode.OUTPUT},
-                tooltip="The Task ID of the generation job from RunwayML.",
-                ui_options={"placeholder_text": ""},
-            )
-        )
 
-        self._output_file = ProjectFileParameter(node=self, name="output_file", default_filename="output.mp4")
-        self._output_file.add_parameter()
+        self._add_output_file_parameter()
+        self._create_status_parameters(result_details_placeholder="Generation progress will appear here.")
 
-    def _get_image_data_uri(self, param_name: str) -> str | None:
-        """Resolve an image input to a value the /v1/image_to_video endpoint accepts."""
-        return prepare_media_data_uri(
-            self.get_parameter_value(param_name),
-            kind="image",
-            node_name="RunwayML I2V",
-        )
-
-    def validate_node(self) -> list[Exception] | None:
-        errors = []
-        api_key = GriptapeNodes.SecretsManager().get_secret(API_KEY_ENV_VAR)
-
-        if not api_key:
-            errors.append(
-                ValueError(
-                    f"RunwayML API key not found. Set {API_KEY_ENV_VAR} in environment variables or Griptape Cloud."
-                )
-            )
-
-        image_data = self._get_image_data_uri("image")
-        if not image_data:
-            errors.append(
-                ValueError(
-                    "Image input ('image') is required and must be a valid ImageUrlArtifact, public URL, or base64 data URI."
-                )
-            )
-
-        prompt_val = self.get_parameter_value("prompt")
-        if not prompt_val or not str(prompt_val).strip():
-            errors.append(ValueError("Text prompt ('prompt') cannot be empty."))
-
-        return errors if errors else None
+        self._sync_model_dependent_parameters(DEFAULT_MODEL)
 
     def after_value_set(self, parameter: Parameter, value: Any) -> None:
         if parameter.name == "model":
-            model_name = self.get_parameter_value("model")
-            if model_name == "gen4_turbo":
-                self._update_option_choices(param="ratio", choices=GEN4_TURBO_RATIOS, default=GEN4_DEFAULT_ASPECT_RATIO)
-            elif model_name == "gen3a_turbo":
-                self._update_option_choices(
-                    param="ratio", choices=GEN3A_TURBO_RATIOS, default=GEN3A_DEFAULT_ASPECT_RATIO
-                )
+            self._sync_model_dependent_parameters(str(value or DEFAULT_MODEL))
+        elif parameter.name == "output_format":
+            output_format = str(value or DEFAULT_OUTPUT_FORMAT)
+            self._sync_output_extension(output_format)
+            self._sync_prores_visibility(output_format)
 
         return super().after_value_set(parameter, value)
 
-    def _download_and_store_video(self, video_url: str, task_id: str | None = None) -> VideoUrlArtifact:
+    def _sync_model_dependent_parameters(self, model_name: str) -> None:
+        """Narrow the ratio list and hide the pro-output group for models that lack it."""
         try:
-            logger.info(f"RunwayML I2V: Downloading video from {video_url}")
-            file_content = File(video_url).read()
+            spec = get_model(model_name, ENDPOINT_IMAGE_TO_VIDEO)
+        except ValueError:
+            # A stale saved workflow can name a retired model. Leave the choices alone;
+            # build_payload reports the model itself as the problem.
+            return
 
-            logger.info("RunwayML I2V: Saving video bytes to project storage...")
-            dest = self._output_file.build_file()
-            dest.write_bytes(file_content.content)
-            logger.info(f"RunwayML I2V: Video saved. URL: {dest.location}")
-            return VideoUrlArtifact(url=dest.location, name="runwayml_video")
-        except FileLoadError as e:
-            logger.error(f"RunwayML I2V: Failed to download and store video: {e}")
-            return VideoUrlArtifact(url=video_url, name="runwayml_video")
+        # `_update_option_choices` always writes the default it is given, so passing a fixed
+        # default would discard a ratio the new model still supports -- and both models here
+        # share one ratio list, which would make every model switch a silent reset.
+        current = self.get_parameter_value("ratio")
+        if current in spec.ratios:
+            default = str(current)
+        elif DEFAULT_ASPECT_RATIO in spec.ratios:
+            default = DEFAULT_ASPECT_RATIO
+        else:
+            default = spec.ratios[0]
+        self._update_option_choices(param="ratio", choices=list(spec.ratios), default=default)
 
-    def process(self) -> AsyncResult:
-        validation_errors = self.validate_node()
-        if validation_errors:
-            error_message = "; ".join(str(e) for e in validation_errors)
-            logger.error(f"RunwayML I2V validation failed: {error_message}")
-            self.publish_update_to_parameter("video_output", ErrorArtifact(error_message))
-            raise ValueError(f"Validation failed: {error_message}")
+        if model_name in PRO_OUTPUT_MODELS:
+            self.show_parameter_by_name("output_format")
+            self.show_parameter_by_name("prores_profile")
+            return
 
-        # Get parameter values
-        prompt_text = str(self.get_parameter_value("prompt") or "").strip()
-        model_name = str(self.get_parameter_value("model") or DEFAULT_MODEL)
-        ratio_val = str(self.get_parameter_value("ratio") or GEN4_DEFAULT_ASPECT_RATIO)
-        seed_val = self.get_parameter_value("seed") or 0
-        duration_val = self.get_parameter_value("duration") or 10
+        self.hide_parameter_by_name("output_format")
+        self.hide_parameter_by_name("prores_profile")
+        # Reset rather than just hide. A stale `prores` left on a model that cannot deliver it
+        # is dropped from the payload, so the user would be billed for an mp4 while the node
+        # still displayed ProRes and a `.mov` filename.
+        if self.get_parameter_value("output_format") != DEFAULT_OUTPUT_FORMAT:
+            self.set_parameter_value("output_format", DEFAULT_OUTPUT_FORMAT)
+            self._sync_output_extension(DEFAULT_OUTPUT_FORMAT)
 
-        # Get image data
-        image_data_uri = self._get_image_data_uri("image")
-        if not image_data_uri:
-            error_msg = "Failed to process image input."
-            self.publish_update_to_parameter("video_output", ErrorArtifact(error_msg))
-            raise ValueError(error_msg)
+    def _get_image_data_uri(self) -> str | None:
+        """Resolve the image input to a value the /v1/image_to_video endpoint accepts."""
+        return prepare_media_data_uri(
+            self.get_parameter_value("image"),
+            kind="image",
+            node_name=self.name,
+        )
 
-        def generate_video_async() -> VideoUrlArtifact | ErrorArtifact:
-            try:
-                api_key = GriptapeNodes.SecretsManager().get_secret(API_KEY_ENV_VAR)
+    def validate_before_node_run(self) -> list[Exception] | None:
+        errors = super().validate_before_node_run() or []
 
-                task_payload = {
-                    "model": model_name,
-                    "promptImage": image_data_uri,
-                    "promptText": prompt_text,
-                    "ratio": ratio_val,
-                    "duration": duration_val,
-                }
-
-                # Note: 'position' parameter removed as it's not supported by the RunwayML Python SDK
-
-                # Add optional parameters if they have non-default values
-                if seed_val and seed_val != 0:
-                    task_payload["seed"] = seed_val
-
-                logger.info(f"RunwayML I2V: Creating task with payload keys: {list(task_payload.keys())}")
-                logger.info(f"RunwayML I2V: Prompt text: '{prompt_text}'")
-
-                headers = {
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "X-Runway-Version": "2024-11-06",
-                }
-
-                # Create a new image-to-video task
-                response = requests.post(
-                    "https://api.dev.runwayml.com/v1/image_to_video", json=task_payload, headers=headers, timeout=60
+        # Presence only: the engine calls this synchronously on its event loop, so reading and
+        # encoding media here would stall every other node. `build_payload` runs in a thread
+        # and reports anything unreadable from there.
+        if not self.get_parameter_value("image"):
+            errors.append(
+                ValueError(
+                    f"Attempted to generate a video on '{self.name}'. Failed because no starting image is "
+                    "set. Connect an image or choose a file."
                 )
-                if response.status_code != 200:
-                    error_body = response.text
-                    logger.error(f"RunwayML I2V: API returned {response.status_code}: {error_body}")
-                    raise ValueError(f"RunwayML API Error ({response.status_code}): {error_body}")
+            )
 
-                task_response = response.json()
-                task_id = task_response.get("id")
-                if not task_id:
-                    raise ValueError(f"No task ID returned from RunwayML API. Response: {task_response}")
-                self.publish_update_to_parameter("task_id_output", task_id)
-                logger.info(f"RunwayML I2V: Task created with ID: {task_id}")
+        model_name = str(self.get_parameter_value("model") or DEFAULT_MODEL)
+        try:
+            spec = get_model(model_name, ENDPOINT_IMAGE_TO_VIDEO)
+        except ValueError as e:
+            errors.append(e)
+            return errors or None
 
-                # Poll the task until it's complete
-                max_retries = 120
-                retry_delay = 10
+        prompt = str(self.get_parameter_value("prompt") or "").strip()
+        if spec.prompt_text_required and not prompt:
+            errors.append(
+                ValueError(
+                    f"Attempted to generate a video on '{self.name}' with {model_name}. "
+                    "Failed because that model requires a text prompt."
+                )
+            )
 
-                for attempt in range(max_retries):
-                    time.sleep(retry_delay)
-                    status_response = requests.get(
-                        f"https://api.dev.runwayml.com/v1/tasks/{task_id}", headers=headers, timeout=30
-                    )
-                    status_response.raise_for_status()
-                    task_status = status_response.json()
-                    status = task_status.get("status")
+        return errors or None
 
-                    logger.info(
-                        f"RunwayML I2V generation status (Task ID: {task_id}): {status} (Attempt {attempt + 1}/{max_retries})"
-                    )
+    def build_payload(self) -> dict[str, Any]:
+        model_name = str(self.get_parameter_value("model") or DEFAULT_MODEL)
+        spec = get_model(model_name, ENDPOINT_IMAGE_TO_VIDEO)
 
-                    if status == "SUCCEEDED":
-                        video_url = None
-                        output = task_status.get("output")
-                        if output:
-                            if isinstance(output, list) and len(output) > 0:
-                                output_item = output[0]
-                                if isinstance(output_item, dict) and "url" in output_item:
-                                    video_url = output_item["url"]
-                                elif isinstance(output_item, str) and output_item.startswith(("http://", "https://")):
-                                    video_url = output_item
-                            elif isinstance(output, dict) and "url" in output:
-                                video_url = output["url"]
-                            elif isinstance(output, str) and output.startswith(("http://", "https://")):
-                                video_url = output
+        image_data_uri = self._get_image_data_uri()
+        if not image_data_uri:
+            msg = (
+                f"Attempted to generate a video on '{self.name}'. Failed because the starting image could not be read."
+            )
+            raise ValueError(msg)
 
-                        if video_url:
-                            logger.info(f"RunwayML I2V generation succeeded: {video_url}")
-                            video_artifact = self._download_and_store_video(video_url, task_id)
-                            self.publish_update_to_parameter("video_output", video_artifact)
-                            return video_artifact
-                        else:
-                            logger.error(
-                                f"RunwayML I2V task SUCCEEDED but no output URL found. Output structure: {task_status.output}"
-                            )
-                            err_msg = "RunwayML I2V task SUCCEEDED but no output URL found."
-                            self.publish_update_to_parameter("video_output", ErrorArtifact(err_msg))
-                            return ErrorArtifact(err_msg)
+        payload: dict[str, Any] = {
+            "model": model_name,
+            "promptImage": image_data_uri,
+            "ratio": str(self.get_parameter_value("ratio") or DEFAULT_ASPECT_RATIO),
+            "duration": int(self.get_parameter_value("duration") or DEFAULT_DURATION),
+            "seed": self._resolve_seed(),
+            "contentModeration": self._content_moderation(),
+        }
 
-                    elif status == "FAILED":
-                        error_msg = f"RunwayML I2V generation failed (Task ID: {task_id})."
-                        if task_status.error:
-                            error_msg += f" Reason: {task_status.error}"
-                        logger.error(error_msg)
-                        self.publish_update_to_parameter("video_output", ErrorArtifact(error_msg))
-                        return ErrorArtifact(error_msg)
+        prompt = str(self.get_parameter_value("prompt") or "").strip()
+        if prompt:
+            payload["promptText"] = prompt
 
-                timeout_msg = f"RunwayML I2V task (ID: {task_id}) timed out after {max_retries * retry_delay} seconds."
-                logger.error(timeout_msg)
-                self.publish_update_to_parameter("video_output", ErrorArtifact(timeout_msg))
-                return ErrorArtifact(timeout_msg)
+        self._attach_output_format(payload, spec, default_format=DEFAULT_OUTPUT_FORMAT)
+        return payload
 
-            except Exception as e:
-                error_message = f"RunwayML I2V unexpected error: {type(e).__name__} - {e}"
-                if hasattr(e, "status") and hasattr(e, "reason") and hasattr(e, "body"):
-                    error_message = f"RunwayML API Error: Status {getattr(e, 'status', 'N/A')} - Reason: {getattr(e, 'reason', 'N/A')} - Body: {getattr(e, 'body', 'N/A')}"
-
-                logger.exception(error_message)
-                self.publish_update_to_parameter("video_output", ErrorArtifact(error_message))
-                return ErrorArtifact(error_message)
-
-        yield generate_video_async
+    def build_artifact(self, location: str) -> VideoUrlArtifact:
+        return VideoUrlArtifact(value=location, name="runwayml_video")
