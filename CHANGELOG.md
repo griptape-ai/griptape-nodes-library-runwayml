@@ -10,4 +10,4 @@ the `library_version` in `runwayml/griptape_nodes_library.json`.
 
 <!-- Entries go in changelog.d/, one file each. See changelog.d/README.md. -->
 
-[Unreleased]: https://github.com/griptape-ai/griptape-nodes-library-runwayml/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/griptape-ai/griptape-nodes-library-runwayml/compare/7ab323cdc5d8a2ceee642d0d96a14b4d326bfb17...HEAD
