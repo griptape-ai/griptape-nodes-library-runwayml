@@ -10,4 +10,22 @@ the `library_version` in `runwayml/griptape_nodes_library.json`.
 
 <!-- Entries go in changelog.d/, one file each. See changelog.d/README.md. -->
 
-[Unreleased]: https://github.com/griptape-ai/griptape-nodes-library-runwayml/compare/7ab323cdc5d8a2ceee642d0d96a14b4d326bfb17...HEAD
+## [0.3.0] - 2026-11-06
+
+### Changed
+
+- **Breaking:** The RunwayML nodes no longer check the API key and inputs when a flow starts. A
+  missing `RUNWAYML_API_SECRET` or an empty input now stops the node when it runs, with the error
+  on the node. A flow with an empty input now starts and fails at that node. A wired Failed output
+  is not followed for a missing key. Nothing needs changing in a saved workflow unless it relied on
+  the flow refusing to start.
+  [#38](https://github.com/griptape-ai/griptape-nodes-library-runwayml/issues/38)
+- Errors from the RunwayML nodes show Runway's own message in the editor, with the task ID,
+  status code, request ID and Runway's response under More info. A missing or refused
+  `RUNWAYML_API_SECRET` links to Settings and to Runway's key page. Input problems name the
+  parameter as the editor labels it, and the "Attempted to ... Failed because" wording and the
+  node name are gone from messages.
+  [#38](https://github.com/griptape-ai/griptape-nodes-library-runwayml/issues/38)
+
+[Unreleased]: https://github.com/griptape-ai/griptape-nodes-library-runwayml/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/griptape-ai/griptape-nodes-library-runwayml/compare/7ab323cdc5d8a2ceee642d0d96a14b4d326bfb17...v0.3.0
