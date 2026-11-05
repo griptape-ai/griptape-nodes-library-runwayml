@@ -360,6 +360,23 @@ class TestProviderResponses:
         assert [link.url for link in error.links] == ["#settings-secrets?filter=RUNWAYML_API_SECRET"]
 
     @pytest.mark.asyncio
+    async def test_a_403_is_not_reported_as_a_refused_key(self) -> None:
+        body = {"error": "You do not have access to this model.", "message": "api key"}
+        error = await self.submit_rejected(httpx.Response(403, json=body))
+
+        assert str(error) == "You do not have access to this model."
+        assert error.fields["status_code"] == httpx.codes.FORBIDDEN
+        assert error.links == []
+        assert error.response == body
+
+    @pytest.mark.asyncio
+    async def test_a_400_that_mentions_the_api_key_is_not_a_refused_key(self) -> None:
+        error = await self.submit_rejected(httpx.Response(400, json={"error": "Invalid API key format in prompt"}))
+
+        assert str(error) == "Invalid API key format in prompt"
+        assert error.links == []
+
+    @pytest.mark.asyncio
     async def test_validation_issues_are_part_of_the_message(self) -> None:
         error = await self.submit_rejected(
             httpx.Response(

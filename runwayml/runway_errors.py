@@ -19,6 +19,7 @@ API_KEY_ENV_VAR = "RUNWAYML_API_SECRET"
 API_KEY_URL = "https://dev.runwayml.com"
 PROVIDER = "RunwayML"
 _PAYLOAD_TOO_LARGE_STATUS = 413
+_KEY_REFUSED_STATUS = 401
 
 
 def missing_key_error() -> NodeError:
@@ -39,7 +40,15 @@ def response_error(response: httpx.Response, *, task_id: str | None = None) -> N
         fields["request_id"] = request_id
     if task_id:
         fields["task_id"] = task_id
-    error = NodeError.from_http_response(response, provider=PROVIDER, secret_name=API_KEY_ENV_VAR, fields=fields)
+    # Only a 401 is known to mean a refused key. RunwayML's 403 is not documented as an auth failure,
+    # so it keeps the provider's own message instead of being reported as a bad key.
+    error = NodeError.from_http_response(
+        response,
+        provider=PROVIDER,
+        secret_name=API_KEY_ENV_VAR,
+        key_refused=response.status_code == _KEY_REFUSED_STATUS,
+        fields=fields,
+    )
 
     if response.status_code == _PAYLOAD_TOO_LARGE_STATUS:
         message = (
