@@ -15,8 +15,8 @@
     "metadata": {
         "author": "Griptape",
         "description": "Griptape Nodes for interacting with the RunwayML API.",
-        "library_version": "0.2.0",
-        "engine_version": "0.101.0",
+        "library_version": "0.3.0",
+        "engine_version": "0.105.0",
         "tags": [
             "Griptape",
             "AI",

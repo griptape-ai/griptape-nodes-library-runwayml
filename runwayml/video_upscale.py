@@ -2,7 +2,7 @@ from typing import Any
 
 from api_surface import ENDPOINT_VIDEO_UPSCALE, get_model, model_choices
 from griptape.artifacts import VideoUrlArtifact
-from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
+from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.param_types.parameter_bool import ParameterBool
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
@@ -150,21 +150,23 @@ class RunwayML_VideoUpscale(RunwayTaskNode):
 
     def validate_before_node_run(self) -> list[Exception] | None:
         errors = super().validate_before_node_run() or []
+        if errors:
+            return errors
 
         # Presence only: the engine calls this synchronously on its event loop, so reading and
         # encoding media here would stall every other node. `build_payload` runs in a thread
         # and reports anything unreadable from there.
         if not self.get_parameter_value("video"):
             errors.append(
-                ValueError(
-                    f"Attempted to upscale a video on '{self.name}'. Failed because no input video is set. "
-                    "Connect a video or choose a file."
+                NodeError(
+                    "No input video is set. Connect a video to 'Video or Path to Video' or choose a file.",
+                    fields={"parameter": "video"},
                 )
             )
 
         try:
             get_model(str(self.get_parameter_value("model") or ""), ENDPOINT_VIDEO_UPSCALE)
-        except ValueError as e:
+        except NodeError as e:
             errors.append(e)
 
         return errors or None
@@ -175,8 +177,8 @@ class RunwayML_VideoUpscale(RunwayTaskNode):
 
         video_uri = self._get_video_uri()
         if not video_uri:
-            msg = f"Attempted to upscale a video on '{self.name}'. Failed because the input video could not be read."
-            raise ValueError(msg)
+            msg = "Could not read the video in 'Video or Path to Video'. Check that the file still exists."
+            raise NodeError(msg, fields={"parameter": "video"})
 
         return {
             "model": model_name,

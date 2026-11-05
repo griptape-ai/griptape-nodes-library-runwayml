@@ -38,6 +38,8 @@ node's Status group.
 Connect **Failed** if you want to handle errors in the graph; leave it unconnected and a
 failure stops the flow instead.
 
+A missing API key stops the run on the node whether or not **Failed** is connected.
+
 ## Professional output formats
 
 `Runway Text-to-Video`, `Runway Image-to-Video` (on `gen4.5`), `Runway Video-to-Video`, and

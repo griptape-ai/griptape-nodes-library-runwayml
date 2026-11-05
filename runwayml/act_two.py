@@ -2,7 +2,7 @@ from typing import Any
 
 from api_surface import ENDPOINT_CHARACTER_PERFORMANCE, get_model, model_choices
 from griptape.artifacts import VideoUrlArtifact
-from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
+from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.param_types.parameter_bool import ParameterBool
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
@@ -184,34 +184,36 @@ class RunwayML_ActTwo(RunwayTaskNode):
 
     def validate_before_node_run(self) -> list[Exception] | None:
         errors = super().validate_before_node_run() or []
+        if errors:
+            return errors
 
         character_type = str(self.get_parameter_value("character_type") or DEFAULT_CHARACTER_TYPE)
         if character_type not in CHARACTER_TYPES:
             errors.append(
-                ValueError(
-                    f"Attempted to generate a performance on '{self.name}'. Failed because the character type "
-                    f"'{character_type}' is not one of {CHARACTER_TYPES}."
+                NodeError(
+                    f"'Character Type' is '{character_type}'. Choose one of: {', '.join(CHARACTER_TYPES)}.",
+                    fields={"parameter": "character_type"},
                 )
             )
         elif not self.get_parameter_value(self._character_parameter_name()):
             errors.append(
-                ValueError(
-                    f"Attempted to generate a performance on '{self.name}'. Failed because no character "
-                    f"{character_type} is set. Connect one or choose a file."
+                NodeError(
+                    f"No character {character_type} is set. Connect one or choose a file.",
+                    fields={"parameter": self._character_parameter_name()},
                 )
             )
 
         if not self.get_parameter_value("reference_video"):
             errors.append(
-                ValueError(
-                    f"Attempted to generate a performance on '{self.name}'. Failed because no reference video "
-                    "is set. Connect the driving performance video."
+                NodeError(
+                    "No reference video is set. Connect the driving performance video to 'Reference Video or Path'.",
+                    fields={"parameter": "reference_video"},
                 )
             )
 
         try:
             get_model(str(self.get_parameter_value("model") or ""), ENDPOINT_CHARACTER_PERFORMANCE)
-        except ValueError as e:
+        except NodeError as e:
             errors.append(e)
 
         return errors or None
@@ -226,10 +228,10 @@ class RunwayML_ActTwo(RunwayTaskNode):
 
         if not character_uri or not reference_uri:
             msg = (
-                f"Attempted to generate a performance on '{self.name}'. Failed because the character or "
-                "reference video could not be read."
+                "Could not read the character or the reference video. "
+                "Check that the files still exist, or connect them again."
             )
-            raise ValueError(msg)
+            raise NodeError(msg)
 
         body_control = self.get_parameter_value("body_control")
         return {

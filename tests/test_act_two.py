@@ -71,7 +71,7 @@ def test_missing_character_image_yields_required_error(node: RunwayML_ActTwo) ->
 
     errors = node.validate_before_node_run()
     assert errors is not None
-    assert any("no character image is set" in str(e) for e in errors)
+    assert any("No character image is set" in str(e) for e in errors)
 
 
 def test_missing_reference_video_yields_required_error(node: RunwayML_ActTwo) -> None:
@@ -81,4 +81,4 @@ def test_missing_reference_video_yields_required_error(node: RunwayML_ActTwo) ->
 
     errors = node.validate_before_node_run()
     assert errors is not None
-    assert any("no reference video" in str(e) for e in errors)
+    assert any("No reference video" in str(e) for e in errors)

@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from api_surface import MODELS, RETIRED_MODELS, ModelSpec, get_model, model_choices
 from check_api_drift import Spec, check_model, check_retired_still_dead
+from griptape_nodes.exe_types.core_types import NodeError
 
 ENDPOINT = "image_to_video"
 MODEL_ID = "test_model"
@@ -293,11 +294,11 @@ class TestApiSurfaceLookups:
         assert len(image_to_video.ratios) > len(text_to_video.ratios)
 
     def test_retired_model_raises_with_migration_hint(self) -> None:
-        with pytest.raises(ValueError, match="aleph2"):
+        with pytest.raises(NodeError, match="aleph2"):
             get_model("gen4_aleph", "video_to_video")
 
     def test_unknown_model_lists_supported_models(self) -> None:
-        with pytest.raises(ValueError, match="gen4_turbo"):
+        with pytest.raises(NodeError, match="gen4_turbo"):
             get_model("not_a_runway_model", "image_to_video")
 
     def test_model_choices_are_scoped_to_the_endpoint(self) -> None:

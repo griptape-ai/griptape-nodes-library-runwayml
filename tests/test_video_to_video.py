@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 import pytest
 from griptape.artifacts import ImageUrlArtifact, VideoUrlArtifact
+from griptape_nodes.exe_types.core_types import NodeError
 from video_to_video import RunwayML_VideoToVideo
 
 
@@ -190,7 +191,7 @@ class TestTranscodeFallback:
 
         with patch("video_to_video.File") as MockFile:
             MockFile.return_value.read_bytes.side_effect = FileLoadError(FileIOFailureReason.FILE_NOT_FOUND, "gone")
-            with pytest.raises(ValueError, match="failed to read video"):
+            with pytest.raises(NodeError, match="Could not read the video"):
                 node._read_to_data_uri("/Volumes/inputs/gone.avi")
 
 
@@ -206,7 +207,7 @@ def test_supported_image_data_uri_passes(node: RunwayML_VideoToVideo) -> None:
 
 def test_unsupported_image_data_uri_raises(node: RunwayML_VideoToVideo) -> None:
     node.set_parameter_value("reference_image", "data:image/gif;base64,AAAA")
-    with pytest.raises(ValueError, match="Unsupported reference image format"):
+    with pytest.raises(NodeError, match="does not accept"):
         node._get_image_data_uri("reference_image")
 
 
@@ -230,7 +231,7 @@ def test_an_unreadable_reference_image_fails_rather_than_being_dropped(node: Run
 
     with patch("media.coercion.File") as MockFile:
         MockFile.return_value.read_data_uri.return_value = None
-        with pytest.raises(ValueError, match="reference image could not be read"):
+        with pytest.raises(NodeError, match="Could not read the image in .Reference Image."):
             node.build_payload()
 
 
@@ -259,7 +260,7 @@ def test_missing_video_yields_required_error(node: RunwayML_VideoToVideo) -> Non
 
     errors = node.validate_before_node_run()
     assert errors is not None
-    assert any("no input video is set" in str(e) for e in errors)
+    assert any("No input video is set" in str(e) for e in errors)
 
 
 def test_local_video_path_validates_when_read_succeeds(node: RunwayML_VideoToVideo) -> None:

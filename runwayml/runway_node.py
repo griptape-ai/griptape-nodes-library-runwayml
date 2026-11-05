@@ -21,7 +21,7 @@ from api_surface import (
     single_file_output_formats,
 )
 from griptape.artifacts import UrlArtifact
-from griptape_nodes.exe_types.core_types import ParameterGroup, ParameterMode
+from griptape_nodes.exe_types.core_types import NodeError, ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
@@ -29,7 +29,7 @@ from griptape_nodes.exe_types.param_types.parameter_string import ParameterStrin
 from griptape_nodes.files.file import File, FileLoadError, FileWriteError
 from griptape_nodes.retained_mode.griptape_nodes import logger
 from griptape_nodes.traits.options import Options
-from runway_client import RunwayClient, RunwayError, get_api_key
+from runway_client import RunwayClient, get_api_key
 
 SEED_CONTROL_FIXED = "fixed"
 SEED_CONTROL_INCREMENT = "increment"
@@ -167,7 +167,7 @@ class RunwayTaskNode(SuccessFailureNode):
         has no plain-mp4 escape), so the field is never omitted.
 
         Raises:
-            ValueError: If the requested format is not one this model can deliver as a single
+            NodeError: If the requested format is not one this model can deliver as a single
                 file. This one check stays local because it is a limit of this library rather
                 than of the API -- RunwayML will happily return a zip of frames, and saving that
                 as a video is worse than refusing it. `output_format` accepts an incoming
@@ -181,10 +181,10 @@ class RunwayTaskNode(SuccessFailureNode):
         if output_format not in deliverable:
             offered = ", ".join(deliverable) if deliverable else "only mp4"
             msg = (
-                f"Attempted to deliver '{output_format}' from '{self.name}'. Failed because "
-                f"{spec.model_id} cannot deliver that format. It supports: {offered}."
+                f"{spec.model_id} cannot deliver '{output_format}' as a single file. "
+                f"Choose a different 'Output Format'. It supports: {offered}."
             )
-            raise ValueError(msg)
+            raise NodeError(msg, fields={"parameter": "output_format"})
 
         payload["outputFormat"] = output_format
         if output_format in PRORES_OUTPUT_FORMATS:
@@ -244,18 +244,17 @@ class RunwayTaskNode(SuccessFailureNode):
 
     # --- Validation ---
 
-    def validate_before_workflow_run(self) -> list[Exception] | None:
-        """Fail the whole run up front when no API key is configured.
+    def validate_before_node_run(self) -> list[Exception] | None:
+        """Report a missing API key first and on its own, then problems with the node's own setup.
 
-        This belongs at workflow scope rather than node scope: a missing key affects every
-        RunwayML node in the graph, and finding out before anything executes beats
-        discovering it after an earlier node has already spent credits.
+        The key is not checked in `validate_before_workflow_run`: that check reaches the editor as a
+        text-only toast, with no node error and no link to Settings.
         """
-        errors = super().validate_before_workflow_run() or []
+        errors = super().validate_before_node_run() or []
         try:
             get_api_key()
-        except RunwayError as e:
-            errors.append(e)
+        except NodeError as e:
+            return [e]
 
         # Checked here rather than at download time: `_save_output` is the first thing to touch
         # `_output_file`, and by then the generation has already been paid for.
@@ -286,6 +285,8 @@ class RunwayTaskNode(SuccessFailureNode):
         output_param = self.output_parameter_name
 
         try:
+            api_key = get_api_key()
+
             # `build_payload` reads media off disk, base64-encodes it, and for video-to-video
             # shells out to ffmpeg. `aprocess` runs on the engine's shared event loop, so doing
             # that inline would stall every other node, progress event, and cancel request for
@@ -293,7 +294,7 @@ class RunwayTaskNode(SuccessFailureNode):
             # did not have this constraint.
             payload = await asyncio.to_thread(self.build_payload)
 
-            async with RunwayClient(node_name=self.name) as client:
+            async with RunwayClient(node_name=self.name, api_key=api_key) as client:
                 task_id = await client.submit(self.endpoint, payload)
                 self.publish_update_to_parameter("task_id_output", task_id)
                 self.append_value_to_parameter("result_details", f"Task {task_id} submitted.\n")
@@ -315,7 +316,7 @@ class RunwayTaskNode(SuccessFailureNode):
             self.publish_update_to_parameter(output_param, artifact)
             self._set_status_results(was_successful=True, result_details=f"Saved output to {artifact.value}")
 
-        except (RunwayError, ValueError, OSError, FileLoadError, FileWriteError) as e:
+        except (NodeError, ValueError, OSError, FileLoadError, FileWriteError) as e:
             # The output parameter is left untouched on failure: a media-typed parameter must
             # never carry an error object. Failures travel down the Failed control output.
             self._set_status_results(was_successful=False, result_details=str(e))

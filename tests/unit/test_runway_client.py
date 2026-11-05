@@ -13,12 +13,10 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from griptape_nodes.exe_types.core_types import NodeError
 from runway_client import (
     MAX_POLL_ATTEMPTS,
     RunwayClient,
-    RunwayRequestError,
-    RunwayTaskFailedError,
-    RunwayTaskTimeoutError,
     extract_output_urls,
 )
 
@@ -97,16 +95,16 @@ class TestSubmit:
     async def test_rejection_reports_status_code(self) -> None:
         runway = FakeRunway([], submit_status=400)
         async with runway.client() as client:
-            with pytest.raises(RunwayRequestError) as excinfo:
+            with pytest.raises(NodeError) as excinfo:
                 await client.submit("image_to_video", {})
-        assert excinfo.value.status_code == httpx.codes.BAD_REQUEST
+        assert excinfo.value.fields["status_code"] == httpx.codes.BAD_REQUEST
 
     @pytest.mark.asyncio
     async def test_payload_too_large_explains_the_size_limit(self) -> None:
         """Runway's own 413 body does not mention that an HTTPS URL avoids the cap."""
         runway = FakeRunway([], submit_status=413)
         async with runway.client() as client:
-            with pytest.raises(RunwayRequestError, match="HTTPS URL"):
+            with pytest.raises(NodeError, match="public HTTPS URL"):
                 await client.submit("image_to_video", {})
 
     @pytest.mark.asyncio
@@ -115,7 +113,7 @@ class TestSubmit:
             return httpx.Response(200, json={})
 
         async with RunwayClient("test", api_key="k", transport=httpx.MockTransport(handler)) as client:
-            with pytest.raises(RunwayRequestError, match="no task id"):
+            with pytest.raises(NodeError, match="no task id"):
                 await client.submit("image_to_video", {})
 
 
@@ -161,21 +159,24 @@ class TestAwaitOutput:
     async def test_failure_surfaces_runways_reason(self) -> None:
         runway = FakeRunway([{"status": "FAILED", "failure": "content moderation"}])
         async with runway.client() as client:
-            with pytest.raises(RunwayTaskFailedError, match="content moderation"):
+            with pytest.raises(NodeError, match="content moderation") as excinfo:
                 await client.await_output(TASK_ID)
+        assert not str(excinfo.value).startswith("Attempted")
+        assert excinfo.value.fields == {"task_id": TASK_ID, "status": "FAILED"}
+        assert excinfo.value.response == {"failure": "content moderation"}
 
     @pytest.mark.asyncio
     async def test_failure_without_a_reason_still_reports(self) -> None:
         runway = FakeRunway([{"status": "FAILED"}])
         async with runway.client() as client:
-            with pytest.raises(RunwayTaskFailedError, match="did not give a reason"):
+            with pytest.raises(NodeError, match="gave no reason"):
                 await client.await_output(TASK_ID)
 
     @pytest.mark.asyncio
     async def test_cancelled_task_is_a_failure(self) -> None:
         runway = FakeRunway([{"status": "CANCELLED"}])
         async with runway.client() as client:
-            with pytest.raises(RunwayTaskFailedError, match="cancelled"):
+            with pytest.raises(NodeError, match="cancelled the task"):
                 await client.await_output(TASK_ID)
 
     @pytest.mark.asyncio
@@ -183,14 +184,14 @@ class TestAwaitOutput:
         """A node must not report success when there is nothing to download."""
         runway = FakeRunway([{"status": "SUCCEEDED", "output": []}])
         async with runway.client() as client:
-            with pytest.raises(RunwayTaskFailedError, match="no downloadable output"):
+            with pytest.raises(NodeError, match="no downloadable output"):
                 await client.await_output(TASK_ID)
 
     @pytest.mark.asyncio
     async def test_timeout_cancels_the_task_so_it_stops_billing(self) -> None:
         runway = FakeRunway([{"status": "RUNNING"}])
         async with runway.client() as client:
-            with pytest.raises(RunwayTaskTimeoutError):
+            with pytest.raises(NodeError, match="still working after 20 minutes"):
                 await client.await_output(TASK_ID)
 
         assert runway.status_calls == MAX_POLL_ATTEMPTS
@@ -210,7 +211,7 @@ class TestAwaitOutput:
             return httpx.Response(200, json={"id": TASK_ID})
 
         async with RunwayClient("test", api_key="k", transport=httpx.MockTransport(handler)) as client:
-            with pytest.raises(RunwayRequestError):
+            with pytest.raises(NodeError):
                 await client.await_output(TASK_ID)
 
         assert any(TASK_ID in url for url in deleted)
@@ -223,8 +224,10 @@ class TestAwaitOutput:
             return httpx.Response(200, json={"id": TASK_ID})
 
         async with RunwayClient("test", api_key="k", transport=httpx.MockTransport(handler)) as client:
-            with pytest.raises(RunwayRequestError, match="500"):
+            with pytest.raises(NodeError, match="server error") as excinfo:
                 await client.await_output(TASK_ID)
+        assert excinfo.value.fields["status_code"] == httpx.codes.INTERNAL_SERVER_ERROR
+        assert excinfo.value.fields["task_id"] == TASK_ID
 
 
 class TestCancel:
@@ -257,7 +260,7 @@ class TestOversizedMediaPreflight:
     async def test_oversized_media_is_rejected_before_upload(self, label: str, payload: dict[str, Any]) -> None:
         runway = FakeRunway([])
         async with runway.client() as client:
-            with pytest.raises(RunwayRequestError, match="allows 5MB inline"):
+            with pytest.raises(NodeError, match="allows 5MB inline"):
                 await client.submit("image_to_video", payload)
 
         assert runway.submitted_payloads == [], f"{label}: should not have been uploaded"
@@ -288,7 +291,7 @@ class TestErrorDetail:
             import asyncio
 
             asyncio.run(client.submit("text_to_image", {}))
-        except RunwayRequestError as e:
+        except NodeError as e:
             return str(e)
         raise AssertionError("expected a rejection")
 
@@ -332,18 +335,73 @@ class TestErrorDetail:
 
     def test_non_json_body_falls_back_to_status_and_text(self) -> None:
         message = self.rejection("upstream exploded", status=502)
-        assert "502" in message
-        assert "upstream exploded" in message
+        assert "HTTP 502" in message
+
+
+class TestProviderResponses:
+    @staticmethod
+    async def submit_rejected(response: httpx.Response) -> NodeError:
+        def handler(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+            return response
+
+        async with RunwayClient("test", api_key="k", transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(NodeError) as excinfo:
+                await client.submit("text_to_image", {})
+        return excinfo.value
+
+    @pytest.mark.asyncio
+    async def test_a_refused_key_links_to_settings_and_keeps_the_response(self) -> None:
+        body = {"error": "The API key you provided is not active.", "docUrl": "https://docs.dev.runwayml.com/api"}
+        error = await self.submit_rejected(httpx.Response(401, json=body, headers={"apigw-requestid": "req-1"}))
+
+        assert str(error).startswith("RunwayML refused the API key")
+        assert error.fields == {"status_code": 401, "request_id": "req-1"}
+        assert error.response == body
+        assert [link.url for link in error.links] == ["#settings-secrets?filter=RUNWAYML_API_SECRET"]
+
+    @pytest.mark.asyncio
+    async def test_a_403_is_not_reported_as_a_refused_key(self) -> None:
+        body = {"error": "You do not have access to this model.", "message": "api key"}
+        error = await self.submit_rejected(httpx.Response(403, json=body))
+
+        assert str(error) == "You do not have access to this model."
+        assert error.fields["status_code"] == httpx.codes.FORBIDDEN
+        assert error.links == []
+        assert error.response == body
+
+    @pytest.mark.asyncio
+    async def test_a_400_that_mentions_the_api_key_is_not_a_refused_key(self) -> None:
+        error = await self.submit_rejected(httpx.Response(400, json={"error": "Invalid API key format in prompt"}))
+
+        assert str(error) == "Invalid API key format in prompt"
+        assert error.links == []
+
+    @pytest.mark.asyncio
+    async def test_validation_issues_are_part_of_the_message(self) -> None:
+        error = await self.submit_rejected(
+            httpx.Response(
+                400,
+                json={"error": "Validation of body failed", "issues": [{"path": ["ratio"], "message": "bad ratio"}]},
+            )
+        )
+
+        assert str(error) == "Validation of body failed (ratio: bad ratio)"
+        assert error.fields["status_code"] == httpx.codes.BAD_REQUEST
 
 
 class TestApiKey:
     def test_a_missing_key_names_where_to_set_it(self) -> None:
-        from runway_client import RunwayAuthError, get_api_key
+        from runway_client import get_api_key
 
         with patch("runway_client.GriptapeNodes") as gn:
             gn.SecretsManager.return_value.get_secret.return_value = None
-            with pytest.raises(RunwayAuthError, match="API Keys & Secrets"):
+            with pytest.raises(NodeError, match="RUNWAYML_API_SECRET is not set") as excinfo:
                 get_api_key()
+
+        assert [link.url for link in excinfo.value.links] == [
+            "#settings-secrets?filter=RUNWAYML_API_SECRET",
+            "https://dev.runwayml.com",
+        ]
 
     def test_a_configured_key_is_returned(self) -> None:
         from runway_client import get_api_key
@@ -363,10 +421,10 @@ class TestTransportFailures:
             raise httpx.ConnectError(msg)
 
         async with RunwayClient("test", api_key="k", transport=httpx.MockTransport(handler)) as client:
-            with pytest.raises(RunwayRequestError, match="could not be sent") as excinfo:
+            with pytest.raises(NodeError, match="Could not reach RunwayML") as excinfo:
                 await client.submit("image_to_video", {})
 
-        assert excinfo.value.status_code == 0
+        assert "status_code" not in excinfo.value.fields
 
     @pytest.mark.asyncio
     async def test_transient_poll_failures_are_retried_before_giving_up(self) -> None:

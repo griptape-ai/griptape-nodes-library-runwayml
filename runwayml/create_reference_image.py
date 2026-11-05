@@ -8,7 +8,7 @@ from artifacts import (
     MIN_REFERENCE_ASPECT_RATIO,
     ReferenceImageArtifact,
 )
-from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
+from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import DataNode
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.files.file import File, FileLoadError
@@ -82,11 +82,8 @@ class RunwayML_CreateReferenceImage(DataNode):
         tag = str(self.get_parameter_value("tag") or "").strip()
 
         if not image:
-            msg = (
-                f"Attempted to create a reference image on '{self.name}'. Failed because no image is set. "
-                "Connect an image or choose a file."
-            )
-            raise ValueError(msg)
+            msg = "No image is set. Connect an image to 'Image' or choose a file."
+            raise NodeError(msg, fields={"parameter": "image"})
 
         aspect_ratio = None
         if isinstance(image, dict):
@@ -105,11 +102,11 @@ class RunwayML_CreateReferenceImage(DataNode):
         # the image that caused it.
         if aspect_ratio is not None and not MIN_REFERENCE_ASPECT_RATIO <= aspect_ratio <= MAX_REFERENCE_ASPECT_RATIO:
             msg = (
-                f"Attempted to create a reference image on '{self.name}'. Failed because its aspect ratio "
-                f"is {aspect_ratio:.2f}, outside the {MIN_REFERENCE_ASPECT_RATIO}-{MAX_REFERENCE_ASPECT_RATIO} "
-                "range RunwayML accepts. Crop the image to something closer to square."
+                f"The image's aspect ratio is {aspect_ratio:.2f}, outside the "
+                f"{MIN_REFERENCE_ASPECT_RATIO}-{MAX_REFERENCE_ASPECT_RATIO} range RunwayML accepts. "
+                "Crop the image to something closer to square."
             )
-            raise ValueError(msg)
+            raise NodeError(msg, fields={"parameter": "image"})
 
         if not tag:
             # A digest, not `hash()`: str hashing is salted per interpreter, so a hash-derived
