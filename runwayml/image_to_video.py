@@ -8,7 +8,7 @@ from api_surface import (
     single_file_output_formats,
 )
 from griptape.artifacts import VideoUrlArtifact
-from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
+from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.traits.options import Options
@@ -163,7 +163,7 @@ class RunwayML_ImageToVideo(RunwayTaskNode):
         """Narrow the ratio list and hide the pro-output group for models that lack it."""
         try:
             spec = get_model(model_name, ENDPOINT_IMAGE_TO_VIDEO)
-        except ValueError:
+        except NodeError:
             # A stale saved workflow can name a retired model. Leave the choices alone;
             # build_payload reports the model itself as the problem.
             return
@@ -204,31 +204,33 @@ class RunwayML_ImageToVideo(RunwayTaskNode):
 
     def validate_before_node_run(self) -> list[Exception] | None:
         errors = super().validate_before_node_run() or []
+        if errors:
+            return errors
 
         # Presence only: the engine calls this synchronously on its event loop, so reading and
         # encoding media here would stall every other node. `build_payload` runs in a thread
         # and reports anything unreadable from there.
         if not self.get_parameter_value("image"):
             errors.append(
-                ValueError(
-                    f"Attempted to generate a video on '{self.name}'. Failed because no starting image is "
-                    "set. Connect an image or choose a file."
+                NodeError(
+                    "No starting image is set. Connect an image to 'Image' or choose a file.",
+                    fields={"parameter": "image"},
                 )
             )
 
         model_name = str(self.get_parameter_value("model") or DEFAULT_MODEL)
         try:
             spec = get_model(model_name, ENDPOINT_IMAGE_TO_VIDEO)
-        except ValueError as e:
+        except NodeError as e:
             errors.append(e)
             return errors or None
 
         prompt = str(self.get_parameter_value("prompt") or "").strip()
         if spec.prompt_text_required and not prompt:
             errors.append(
-                ValueError(
-                    f"Attempted to generate a video on '{self.name}' with {model_name}. "
-                    "Failed because that model requires a text prompt."
+                NodeError(
+                    f"{model_name} requires a text prompt. Enter one in 'Prompt'.",
+                    fields={"parameter": "prompt"},
                 )
             )
 
@@ -240,10 +242,8 @@ class RunwayML_ImageToVideo(RunwayTaskNode):
 
         image_data_uri = self._get_image_data_uri()
         if not image_data_uri:
-            msg = (
-                f"Attempted to generate a video on '{self.name}'. Failed because the starting image could not be read."
-            )
-            raise ValueError(msg)
+            msg = "Could not read the image in 'Image'. Check that the file still exists."
+            raise NodeError(msg, fields={"parameter": "image"})
 
         payload: dict[str, Any] = {
             "model": model_name,

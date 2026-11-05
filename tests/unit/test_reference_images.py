@@ -21,6 +21,7 @@ from artifacts import (
     unpack_reference_image,
 )
 from griptape.artifacts import ImageUrlArtifact
+from griptape_nodes.exe_types.core_types import NodeError
 
 
 def png_bytes(width: int, height: int) -> bytes:
@@ -100,7 +101,7 @@ class TestCreateReferenceImageNode:
 
     def test_no_image_is_rejected(self) -> None:
         node = self.build()
-        with pytest.raises(ValueError, match="no image is set"):
+        with pytest.raises(NodeError, match="No image is set"):
             asyncio.run(node.aprocess())
 
     def test_a_square_image_produces_a_tagged_artifact(self) -> None:
@@ -124,7 +125,7 @@ class TestCreateReferenceImageNode:
 
         with patch("create_reference_image.File") as mock_file:
             mock_file.return_value.read_bytes.return_value = png_bytes(width, height)
-            with pytest.raises(ValueError, match="aspect ratio"):
+            with pytest.raises(NodeError, match="aspect ratio"):
                 asyncio.run(node.aprocess())
 
     @pytest.mark.parametrize("ratio", [MIN_REFERENCE_ASPECT_RATIO, 1.0, MAX_REFERENCE_ASPECT_RATIO])
@@ -179,7 +180,7 @@ class TestCreateReferenceImageNode:
 
         with patch("create_reference_image.File") as mock_file:
             mock_file.return_value.read_bytes.return_value = png_bytes(3000, 600)
-            with pytest.raises(ValueError, match="aspect ratio"):
+            with pytest.raises(NodeError, match="aspect ratio"):
                 asyncio.run(node.aprocess())
 
         assert mock_file.call_args.args[0] == "{inputs}/pano.png"
@@ -228,12 +229,12 @@ class TestTextToImageReferenceResolution:
     def test_a_data_uri_that_is_not_base64_is_reported_as_a_format_problem(self) -> None:
         """Inline SVG arrives verbatim; unpacking it would surface as an unpacking error."""
         node = self.build(image="data:image/svg+xml,<svg/>")
-        with pytest.raises(ValueError, match="not in a format RunwayML can read"):
+        with pytest.raises(NodeError, match="not in a format RunwayML can read"):
             node.build_payload()
 
     def test_undecodable_image_bytes_are_reported_as_a_format_problem(self) -> None:
         node = self.build(image="data:image/tiff;base64,bm90YW5pbWFnZQ==")
-        with pytest.raises(ValueError, match="not in a format RunwayML can read"):
+        with pytest.raises(NodeError, match="not in a format RunwayML can read"):
             node.build_payload()
 
     def test_an_oversized_reference_is_refused_before_upload(self) -> None:
@@ -241,13 +242,13 @@ class TestTextToImageReferenceResolution:
 
         oversized = "data:image/png;base64," + "A" * (MAX_DATA_URI_BYTES + 1)
         node = self.build(image=oversized)
-        with pytest.raises(ValueError, match="too large"):
+        with pytest.raises(NodeError, match="too large"):
             node.build_payload()
 
     def test_an_unreadable_reference_is_reported(self) -> None:
         node = self.build(image=ImageUrlArtifact("https://e.com/i.png"))
         with patch("text_to_image.prepare_media_data_uri", return_value=None):
-            with pytest.raises(ValueError, match="could not be read"):
+            with pytest.raises(NodeError, match="could not be read"):
                 node.build_payload()
 
     def test_a_non_reference_artifact_is_reported(self) -> None:
@@ -255,7 +256,7 @@ class TestTextToImageReferenceResolution:
         child = node.get_parameter_by_name("reference_images").add_child_parameter()
         node.set_parameter_value(child.name, "not a reference image")
 
-        with pytest.raises(ValueError, match="is not a reference image"):
+        with pytest.raises(NodeError, match="is not a reference image"):
             node.build_payload()
 
     def test_references_are_omitted_when_none_are_connected(self) -> None:

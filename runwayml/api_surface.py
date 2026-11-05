@@ -18,6 +18,8 @@ library.
 
 from dataclasses import dataclass, field
 
+from griptape_nodes.exe_types.core_types import NodeError
+
 RUNWAY_API_BASE = "https://api.dev.runwayml.com/v1"
 
 # Runway pins behaviour to a dated API version rather than a semver range. It is sent
@@ -345,7 +347,7 @@ def get_model(model_id: str, endpoint: str) -> ModelSpec:
     """Look up one model's constraints.
 
     Raises:
-        ValueError: If the model is unknown or retired for this endpoint. Retired
+        NodeError: If the model is unknown or retired for this endpoint. Retired
             identifiers get the migration hint from ``RETIRED_MODELS``.
     """
     for spec in MODELS:
@@ -354,8 +356,8 @@ def get_model(model_id: str, endpoint: str) -> ModelSpec:
 
     if model_id in RETIRED_MODELS:
         msg = f"Model '{model_id}' is no longer available from Runway. {RETIRED_MODELS[model_id]}"
-        raise ValueError(msg)
+        raise NodeError(msg, fields={"parameter": "model"})
 
     supported = ", ".join(model_choices(endpoint)) or "none"
     msg = f"Model '{model_id}' is not supported on Runway's {endpoint} endpoint. Supported models: {supported}."
-    raise ValueError(msg)
+    raise NodeError(msg, fields={"parameter": "model"})

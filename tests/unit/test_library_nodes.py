@@ -97,7 +97,7 @@ class TestNewNodePayloads:
             node = RunwayML_TextToVideo(name="t2v")
         errors = node.validate_before_node_run()
         assert errors is not None
-        assert any("prompt is empty" in str(e) for e in errors)
+        assert any("Enter a prompt in 'Prompt'" in str(e) for e in errors)
 
     def test_video_to_hdr_defaults_to_hdr10_without_a_prores_profile(self) -> None:
         from video_to_hdr import RunwayML_VideoToHDR
@@ -132,7 +132,7 @@ class TestNewNodePayloads:
             node = RunwayML_VideoToHDR(name="hdr")
         errors = node.validate_before_node_run()
         assert errors is not None
-        assert any("no input video is set" in str(e) for e in errors)
+        assert any("No input video is set" in str(e) for e in errors)
 
 
 @pytest.mark.parametrize("entry", NODE_ENTRIES, ids=lambda e: e["class_name"])

@@ -13,10 +13,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from griptape.artifacts import VideoUrlArtifact
-from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
+from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterMode
 from griptape_nodes.files.file import FileWriteError
 from griptape_nodes.retained_mode.events.os_events import FileIOFailureReason
-from runway_client import RunwayTaskFailedError
+from runway_errors import missing_key_error
 from runway_node import DEFAULT_SEED, RunwayTaskNode
 
 
@@ -98,15 +98,20 @@ class TestSeedResolution:
 
 
 class TestValidation:
-    def test_missing_api_key_fails_the_workflow_before_it_runs(self, node: StubRunwayNode) -> None:
-        with patch("runway_node.get_api_key", side_effect=RunwayTaskFailedError("no key")):
-            errors = node.validate_before_workflow_run()
+    def test_missing_api_key_is_the_only_node_run_error(self, node: StubRunwayNode) -> None:
+        with patch("runway_node.get_api_key", side_effect=missing_key_error()):
+            errors = node.validate_before_node_run()
         assert errors is not None
-        assert any("no key" in str(e) for e in errors)
+        assert [str(e) for e in errors] == [str(missing_key_error())]
+
+    def test_missing_api_key_is_not_checked_at_workflow_start(self, node: StubRunwayNode) -> None:
+        """A workflow-start failure reaches the editor as text only, with no link to Settings."""
+        with patch("runway_node.get_api_key", side_effect=missing_key_error()):
+            assert node.validate_before_workflow_run() is None
 
     def test_configured_api_key_passes(self, node: StubRunwayNode) -> None:
         with patch("runway_node.get_api_key", return_value="k"):
-            assert node.validate_before_workflow_run() is None
+            assert node.validate_before_node_run() is None
 
 
 class TestSeedIsPublished:
@@ -189,7 +194,7 @@ class TestOutputFileContract:
 
         with patch("runway_node.get_api_key", return_value="k"):
             node = MissingOutputFile(name="broken")
-            errors = node.validate_before_workflow_run()
+            errors = node.validate_before_node_run()
 
         assert errors is not None
         assert any("output file parameter" in str(e) for e in errors)
@@ -203,7 +208,7 @@ class TestFailureRouting:
             patch("runway_node.RunwayClient") as mock_client,
             patch.object(node, "_handle_failure_exception") as mock_handle,
         ):
-            mock_client.return_value.__aenter__.return_value.submit.side_effect = RunwayTaskFailedError("boom")
+            mock_client.return_value.__aenter__.return_value.submit.side_effect = NodeError("boom")
             await node.aprocess()
 
         assert "video_output" not in node.parameter_output_values
@@ -217,7 +222,7 @@ class TestFailureRouting:
             patch("runway_node.RunwayClient") as mock_client,
             patch.object(node, "_has_outgoing_connections", return_value=True),
         ):
-            mock_client.return_value.__aenter__.return_value.submit.side_effect = RunwayTaskFailedError("boom")
+            mock_client.return_value.__aenter__.return_value.submit.side_effect = NodeError("boom")
             await node.aprocess()
 
         assert node.get_next_control_output() is node.failure_output

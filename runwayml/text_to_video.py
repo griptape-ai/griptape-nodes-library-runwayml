@@ -8,7 +8,7 @@ from api_surface import (
     single_file_output_formats,
 )
 from griptape.artifacts import VideoUrlArtifact
-from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
+from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.traits.options import Options
@@ -137,16 +137,16 @@ class RunwayML_TextToVideo(RunwayTaskNode):
 
     def validate_before_node_run(self) -> list[Exception] | None:
         errors = super().validate_before_node_run() or []
+        if errors:
+            return errors
 
         prompt = str(self.get_parameter_value("prompt") or "").strip()
         if not prompt:
-            errors.append(
-                ValueError(f"Attempted to generate a video on '{self.name}'. Failed because the prompt is empty.")
-            )
+            errors.append(NodeError("Enter a prompt in 'Prompt'.", fields={"parameter": "prompt"}))
 
         try:
             get_model(str(self.get_parameter_value("model") or ""), ENDPOINT_TEXT_TO_VIDEO)
-        except ValueError as e:
+        except NodeError as e:
             errors.append(e)
 
         return errors or None

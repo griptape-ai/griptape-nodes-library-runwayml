@@ -12,7 +12,7 @@ from api_surface import (
     single_file_output_formats,
 )
 from griptape.artifacts import VideoUrlArtifact
-from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
+from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.retained_mode.griptape_nodes import logger
@@ -216,13 +216,13 @@ class RunwayML_VideoToVideo(RunwayTaskNode):
         """Read `source` (local path or HTTP(S) URL), transcode if needed, and base64 it.
 
         Raises:
-            ValueError: If the source cannot be read.
+            NodeError: If the source cannot be read.
         """
         try:
             video_bytes = File(source).read_bytes()
         except FileLoadError as e:
-            msg = f"RunwayML V2V: failed to read video from {source!r}: {e}"
-            raise ValueError(msg) from e
+            msg = f"Could not read the video at {source!r}. Check that the file still exists."
+            raise NodeError(msg, fields={"parameter": "video"}) from e
 
         # Only re-encode a container RunwayML will not take. Transcoding unconditionally cost a
         # generation of quality on every local input, and this node can be asked to deliver
@@ -290,7 +290,7 @@ class RunwayML_VideoToVideo(RunwayTaskNode):
 
         RunwayML's ``/v1/video_to_video`` endpoint only accepts JPEG, PNG, or WebP
         reference images. HTTPS URLs are downloaded so the format can be inspected;
-        data URIs are validated in place. Unsupported formats raise ``ValueError``.
+        data URIs are validated in place. Unsupported formats raise ``NodeError``.
         """
         # Force an HTTPS download via ``pass_through_schemes=()`` so we always end up with a
         # data URI whose content type we can inspect.
@@ -306,29 +306,31 @@ class RunwayML_VideoToVideo(RunwayTaskNode):
         content_type = data_uri.split(":", 1)[1].split(";", 1)[0]
         if content_type not in SUPPORTED_REFERENCE_IMAGE_FORMATS:
             msg = (
-                f"Unsupported reference image format: {content_type}. "
-                "Supported formats are image/jpeg, image/png, and image/webp."
+                f"'Reference Image' is {content_type}, which RunwayML does not accept. "
+                "Use image/jpeg, image/png or image/webp."
             )
-            raise ValueError(msg)
+            raise NodeError(msg, fields={"parameter": "reference_image"})
         return data_uri
 
     def validate_before_node_run(self) -> list[Exception] | None:
         errors = super().validate_before_node_run() or []
+        if errors:
+            return errors
 
         # Presence only: the engine calls this synchronously on its event loop, so reading and
         # encoding media here would stall every other node. `build_payload` runs in a thread
         # and reports anything unreadable from there.
         if not self.get_parameter_value("video"):
             errors.append(
-                ValueError(
-                    f"Attempted to edit a video on '{self.name}'. Failed because no input video is set. "
-                    "Connect a video or choose a file."
+                NodeError(
+                    "No input video is set. Connect a video to 'Video or Path to Video' or choose a file.",
+                    fields={"parameter": "video"},
                 )
             )
 
         try:
             get_model(str(self.get_parameter_value("model") or ""), ENDPOINT_VIDEO_TO_VIDEO)
-        except ValueError as e:
+        except NodeError as e:
             errors.append(e)
 
         # Aleph 2 treats promptText as optional, so an empty prompt is not an error here, and
@@ -341,8 +343,8 @@ class RunwayML_VideoToVideo(RunwayTaskNode):
 
         video_uri = self._get_video_data_uri("video")
         if not video_uri:
-            msg = f"Attempted to edit a video on '{self.name}'. Failed because the input video could not be read."
-            raise ValueError(msg)
+            msg = "Could not read the video in 'Video or Path to Video'. Check that the file still exists."
+            raise NodeError(msg, fields={"parameter": "video"})
 
         payload: dict[str, Any] = {
             "model": model_name,
@@ -367,11 +369,8 @@ class RunwayML_VideoToVideo(RunwayTaskNode):
         if self.get_parameter_value("reference_image"):
             reference_image_uri = self._get_image_data_uri("reference_image")
             if not reference_image_uri:
-                msg = (
-                    f"Attempted to edit a video on '{self.name}'. Failed because the reference image "
-                    "could not be read. Check that the file still exists, or clear the input."
-                )
-                raise ValueError(msg)
+                msg = "Could not read the image in 'Reference Image'. Check that the file still exists, or clear the input."
+                raise NodeError(msg, fields={"parameter": "reference_image"})
             # `references` was gen4_aleph's field. aleph2 declares additionalProperties:false
             # and does not accept it, so sending it 400s the request outright; timed `keyframes`
             # replaced it. One guidance image applies at the start of the clip.

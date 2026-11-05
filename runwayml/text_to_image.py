@@ -12,7 +12,7 @@ from api_surface import (
 )
 from artifacts import ReferenceImageArtifact, unpack_reference_image
 from griptape.artifacts import ImageUrlArtifact
-from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterList, ParameterMode
+from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterGroup, ParameterList, ParameterMode
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.retained_mode.griptape_nodes import logger
 from griptape_nodes.traits.options import Options
@@ -157,12 +157,12 @@ class RunwayML_TextToImage(RunwayTaskNode):
         """Turn one reference image into a URI RunwayML accepts.
 
         Raises:
-            ValueError: If the image cannot be read, converted, or is over the size limit.
+            NodeError: If the image cannot be read, converted, or is over the size limit.
         """
         resolved = prepare_media_data_uri(image, kind="image", node_name=self.name)
         if not resolved:
-            msg = f"A reference image on '{self.name}' could not be read."
-            raise ValueError(msg)
+            msg = "A reference image in 'Reference Images' could not be read. Check that the file still exists."
+            raise NodeError(msg, fields={"parameter": "reference_images"})
 
         # HTTPS and runway:// URIs are sent as-is and are not subject to the inline size cap.
         if not resolved.startswith("data:image"):
@@ -170,17 +170,17 @@ class RunwayML_TextToImage(RunwayTaskNode):
 
         converted = self._to_supported_data_uri(resolved)
         if not converted:
-            msg = f"A reference image on '{self.name}' is not in a format RunwayML can read."
-            raise ValueError(msg)
+            msg = "A reference image in 'Reference Images' is not in a format RunwayML can read. Use a PNG or JPEG."
+            raise NodeError(msg, fields={"parameter": "reference_images"})
 
         size = len(converted.encode("utf-8"))
         if size > MAX_DATA_URI_BYTES:
             msg = (
-                f"A reference image on '{self.name}' is too large ({size / (1024 * 1024):.1f}MB encoded). "
+                f"A reference image in 'Reference Images' is too large ({size / (1024 * 1024):.1f}MB encoded). "
                 f"RunwayML allows {MAX_DATA_URI_BYTES // (1024 * 1024)}MB inline, about 3.3MB of source file. "
                 "Use a smaller image or a public HTTPS URL."
             )
-            raise ValueError(msg)
+            raise NodeError(msg, fields={"parameter": "reference_images"})
 
         return converted
 
@@ -192,17 +192,17 @@ class RunwayML_TextToImage(RunwayTaskNode):
         refusing valid requests the moment RunwayML relaxed it.
 
         Raises:
-            ValueError: If a reference image cannot be read or converted.
+            NodeError: If a reference image cannot be read or converted.
         """
         references = []
         for index, candidate in enumerate(self.get_parameter_list_value("reference_images") or []):
             image, tag = unpack_reference_image(candidate)
             if image is None:
                 msg = (
-                    f"Reference image {index + 1} on '{self.name}' is not a reference image. "
+                    f"Reference image {index + 1} in 'Reference Images' is not a reference image. "
                     "Connect a 'Runway Create Reference Image' node."
                 )
-                raise ValueError(msg)
+                raise NodeError(msg, fields={"parameter": "reference_images"})
 
             # A tag is what makes the image addressable as @tag in the prompt, so an untagged
             # image still needs one to be usable at all.
@@ -212,16 +212,16 @@ class RunwayML_TextToImage(RunwayTaskNode):
 
     def validate_before_node_run(self) -> list[Exception] | None:
         errors = super().validate_before_node_run() or []
+        if errors:
+            return errors
 
         if not str(self.get_parameter_value("prompt_text") or "").strip():
-            errors.append(
-                ValueError(f"Attempted to generate an image on '{self.name}'. Failed because the prompt is empty.")
-            )
+            errors.append(NodeError("Enter a prompt in 'Prompt Text'.", fields={"parameter": "prompt_text"}))
 
         model_name = str(self.get_parameter_value("model") or DEFAULT_MODEL)
         try:
             spec = get_model(model_name, ENDPOINT_TEXT_TO_IMAGE)
-        except ValueError as e:
+        except NodeError as e:
             errors.append(e)
             return errors or None
 
@@ -229,9 +229,10 @@ class RunwayML_TextToImage(RunwayTaskNode):
         # resolving here would PIL-decode and base64 every reference image before the run.
         if "referenceImages" in spec.required_fields and not (self.get_parameter_list_value("reference_images") or []):
             errors.append(
-                ValueError(
-                    f"Attempted to generate an image on '{self.name}' with {model_name}. Failed because that "
-                    "model requires at least one reference image."
+                NodeError(
+                    f"{model_name} requires at least one reference image. "
+                    "Connect a 'Runway Create Reference Image' node to 'Reference Images'.",
+                    fields={"parameter": "reference_images"},
                 )
             )
 
