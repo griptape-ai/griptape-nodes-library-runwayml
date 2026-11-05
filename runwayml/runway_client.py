@@ -79,6 +79,29 @@ def extract_output_urls(task: dict[str, Any]) -> list[str]:
     return urls
 
 
+def _json_object(response: httpx.Response, *, task_id: str | None = None) -> dict[str, Any]:
+    """Parse a 2xx body that must be a JSON object.
+
+    A gateway can answer 200 with an HTML page, an empty body or a JSON list. Those are not
+    `httpx.HTTPError`s, so they are turned into a NodeError here instead of escaping as a
+    `JSONDecodeError` or an `AttributeError` on `.get`.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict):
+        return body
+    fields: dict[str, str | int | float | bool] = {"status_code": response.status_code}
+    if task_id:
+        fields["task_id"] = task_id
+    raise NodeError(
+        "RunwayML sent a response the node could not read. Run the node again.",
+        fields=fields,
+        response={"body": response.text[:2000]} if response.text.strip() else None,
+    )
+
+
 class RunwayClient:
     """Submits Runway tasks and waits for them.
 
@@ -138,7 +161,7 @@ class RunwayClient:
         if not response.is_success:
             raise response_error(response)
 
-        task_id = response.json().get("id")
+        task_id = _json_object(response).get("id")
         if not task_id:
             raise NodeError(
                 "RunwayML accepted the request but its response had no task id. Run the node again.",
@@ -284,7 +307,7 @@ class RunwayClient:
         if not response.is_success:
             raise response_error(response, task_id=task_id)
 
-        return response.json()
+        return _json_object(response, task_id=task_id)
 
     def _read_terminal_task(self, task_id: str, task: dict[str, Any], status: str) -> list[str]:
         if status in (STATUS_CANCELLED, STATUS_FAILED):

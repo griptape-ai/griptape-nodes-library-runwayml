@@ -11,11 +11,13 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from griptape.artifacts import VideoUrlArtifact
 from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterMode
 from griptape_nodes.files.file import FileWriteError
 from griptape_nodes.retained_mode.events.os_events import FileIOFailureReason
+from runway_client import RunwayClient
 from runway_errors import missing_key_error
 from runway_node import DEFAULT_SEED, RunwayTaskNode
 
@@ -241,3 +243,59 @@ class TestFailureRouting:
         assert node.parameter_output_values["video_output"].value == "/tmp/out.mp4"
         assert node.get_parameter_value("was_successful") is True
         assert node.get_next_control_output() is node.control_parameter_out
+
+
+UNREADABLE_BODIES = {
+    "html": httpx.Response(200, text="<html>Bad gateway</html>"),
+    "empty": httpx.Response(200, content=b""),
+    "list": httpx.Response(200, json=[{"id": "task-1"}]),
+}
+
+
+class TestUnreadableSuccessBodies:
+    """A 200 with a body that is not a JSON object must end as a NodeError routed like any failure."""
+
+    @staticmethod
+    def _client_factory(where: str, body: httpx.Response):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "DELETE":
+                return httpx.Response(204)
+            if where == "submit" or request.method == "GET":
+                return body
+            return httpx.Response(200, json={"id": "task-1"})
+
+        def factory(node_name: str, api_key: str | None = None) -> RunwayClient:
+            return RunwayClient(node_name, api_key=api_key, transport=httpx.MockTransport(handler))
+
+        return factory
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("where", ["submit", "poll"])
+    @pytest.mark.parametrize("kind", list(UNREADABLE_BODIES))
+    async def test_failed_is_followed_when_wired(self, node: StubRunwayNode, where: str, kind: str) -> None:
+        with (
+            patch("runway_node.RunwayClient", self._client_factory(where, UNREADABLE_BODIES[kind])),
+            patch("runway_client.POLL_INTERVAL_SECONDS", 0),
+            patch.object(node, "_has_outgoing_connections", return_value=True),
+        ):
+            await node.aprocess()
+
+        assert node.get_parameter_value("was_successful") is False
+        assert "could not read" in str(node.get_parameter_value("result_details"))
+        assert node.get_next_control_output() is node.failure_output
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("where", ["submit", "poll"])
+    @pytest.mark.parametrize("kind", list(UNREADABLE_BODIES))
+    async def test_node_error_is_raised_when_failed_is_unwired(
+        self, node: StubRunwayNode, where: str, kind: str
+    ) -> None:
+        with (
+            patch("runway_node.RunwayClient", self._client_factory(where, UNREADABLE_BODIES[kind])),
+            patch("runway_client.POLL_INTERVAL_SECONDS", 0),
+            patch.object(node, "_has_outgoing_connections", return_value=False),
+            pytest.raises(NodeError, match="could not read") as excinfo,
+        ):
+            await node.aprocess()
+
+        assert excinfo.value.fields["status_code"] == httpx.codes.OK
