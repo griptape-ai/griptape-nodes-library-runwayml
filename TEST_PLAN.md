@@ -28,7 +28,7 @@ Watching for three things this change introduced:
   real test of it.
 - `httpx` and `pillow` install from `pip_dependencies`. Both are new and have only ever been
   satisfied by the dev environment.
-- `engine_version` is `0.101.0`, raised for `SuccessFailureNode` / `aprocess` /
+- `engine_version` is `0.105.0`, raised for `SuccessFailureNode` / `aprocess` /
   `exe_types.param_types`. If the engine rejects the library on version, that number is wrong.
 
 ### 0.2 Key is configured
@@ -43,10 +43,11 @@ Watching for three things this change introduced:
 These live in `RunwayTaskNode` / `RunwayClient`, so they do not need repeating per node. Use
 Text-to-Image; it is the fastest to iterate on.
 
-### 1.1 Validation fires in the editor
+### 1.1 Errors appear on the node
 
-- [ ] Key unset → the run fails before anything executes, naming the missing key
-- [ ] Required input missing → error in the editor, not at run time
+- [ ] Key unset → the flow starts and the node fails on its header with the missing-key message and
+      a Settings link. The key is the only error listed, even with inputs missing.
+- [ ] Required input missing → the node reports it on its header when it runs, naming the parameter
 - [ ] A retired model driven in **over a connection** (string node → `model`, so the `Options`
       trait cannot snap it) → editor error naming the model
 
